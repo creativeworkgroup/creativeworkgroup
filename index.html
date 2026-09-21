@@ -217,7 +217,7 @@ button:disabled {
         <input
             type="text"
             id="sendFrom"
-            value="info@creativeworkgroup.org">
+            value="Ashley Mok &lt;info@creativeworkgroup.org&gt;">
     </div>
 
     <div class="form-group">
@@ -620,7 +620,6 @@ async function processQueue() {
 
     const {
         sendFrom,
-        replyTo,
         variants,
         recipients
     } = mailQueue;
@@ -810,7 +809,6 @@ const rawTo = document
 
     mailQueue = {
         sendFrom,
-        replyTo,
         variants,
         recipients,
         index: 0,

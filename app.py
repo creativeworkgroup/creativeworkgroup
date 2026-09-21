@@ -24,7 +24,6 @@ def send_email():
 
         sender = data.get("from", "").strip()
         recipients = data.get("to", [])
-        reply_to = data.get("reply_to", "").strip()
         variants = data.get("variants", [])
 
         if isinstance(recipients, str):
@@ -136,8 +135,6 @@ def send_email():
                 ),
             }
 
-            if reply_to:
-                payload["reply_to"] = reply_to
 
             try:
                 response = requests.post(
