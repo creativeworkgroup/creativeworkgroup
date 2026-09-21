@@ -588,6 +588,16 @@ function addQueueResult(result) {
         item.appendChild(variant);
         item.appendChild(status);
 
+        if (result.status !== "Sent" && result.error) {
+            const error = document.createElement("span");
+            error.className = "result-error";
+            error.textContent =
+                typeof result.error === "string"
+                    ? result.error
+                    : JSON.stringify(result.error);
+            item.appendChild(error);
+        }
+
         resultsList.appendChild(item);
     });
 }
@@ -692,7 +702,8 @@ variants
                 addQueueResult({
                     email: recipient,
                     status: "Failed",
-                    variant: "—"
+                    variant: "—",
+                    error: error.message || String(error)
                 });
             }
 
