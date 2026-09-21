@@ -1,4 +1,5 @@
 import os
+import time
 import html
 import requests
 from flask import Flask, request, jsonify, send_file
@@ -169,6 +170,8 @@ def send_email():
                     "variant": variant_index + 1,
                     "error": str(exc),
                 })
+            if index < len(recipients) - 1:
+                time.sleep(10)
 
         return jsonify({
             "success": failed == 0,
