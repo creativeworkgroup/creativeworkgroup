@@ -548,6 +548,8 @@ async function startSending() {
 
         renderResults(data.results || []);
 
+        document.getElementById("recipients").value = "";
+
     } catch (error) {
         progress.innerHTML = `
             <strong>Status:</strong>
