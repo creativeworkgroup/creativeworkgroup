@@ -50,6 +50,21 @@ def send_email():
         if not sender:
             return jsonify({"error": "Send From is required."}), 400
 
+        sender_match = re.match(
+            r'^\s*(?:(.*?)\s*)?<([^<>]+)>\s*$',
+            sender
+        )
+
+        if sender_match:
+            sender_name = (sender_match.group(1) or "").strip()
+            sender_address = sender_match.group(2).strip()
+        else:
+            sender_name = ""
+            sender_address = sender.strip()
+
+        if not re.match(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$", sender_address):
+            return jsonify({"error": "Invalid Send From email address."}), 400
+
         if not recipients:
             return jsonify({
                 "error": "At least one recipient is required."
@@ -107,8 +122,8 @@ def send_email():
 
             payload = {
                 "from": {
-                    "address": sender,
-                    "name": "Ashley Mok"
+                    "address": sender_address,
+                    "name": sender_name
                 },
                 "to": [recipient],
                 "subject": variant["subject"],
