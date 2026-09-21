@@ -449,21 +449,17 @@ function renderResults(results) {
 
 async function startSending() {
     const sendBtn = document.getElementById("sendBtn");
-
     const sendFrom = document
         .getElementById("sendFrom")
         .value
         .trim();
-
     const replyTo = document
         .getElementById("replyTo")
         .value
         .trim();
-
     const rawTo = document
         .getElementById("sendTo")
         .value;
-
     const recipients = rawTo
         .split(/\r?\n/)
         .map(email => email.trim())
@@ -500,62 +496,142 @@ async function startSending() {
     const progress = document.getElementById("sendingProgress");
     const sentCount = document.getElementById("sentCount");
     const notSentCount = document.getElementById("notSentCount");
+    const resultsList = document.getElementById("resultsList");
 
     stats.style.display = "block";
     sentCount.textContent = "0";
     notSentCount.textContent = "0";
+    resultsList.innerHTML = "";
 
-    document.getElementById("resultsList").innerHTML = "";
-
-    progress.innerHTML = `
-        <strong>Status:</strong>
-        <span>Sending 0 / ${recipients.length}</span>
-    `;
+    let sent = 0;
+    let failed = 0;
 
     try {
-        const response = await fetch("/api/send", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                from: sendFrom,
-                to: recipients,
-                reply_to: replyTo,
-                variants
-            })
-        });
+        for (let index = 0; index < recipients.length; index++) {
+            const recipient = recipients[index];
 
-        const data = await response.json();
+            progress.innerHTML = `
+                <strong>Status:</strong>
+                <span>Sending ${index + 1} / ${recipients.length}</span>
+            `;
 
-        if (!response.ok || !data.success && !data.results) {
-            throw new Error(
-                typeof data.error === "string"
-                    ? data.error
-                    : JSON.stringify(data.error || data)
-            );
+            try {
+                const response = await fetch("/api/send", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        from: sendFrom,
+                        to: [recipient],
+                        reply_to: replyTo,
+                        variants
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok || (!data.success && !data.results)) {
+                    throw new Error(
+                        typeof data.error === "string"
+                            ? data.error
+                            : JSON.stringify(data.error || data)
+                    );
+                }
+
+                const result = data.results && data.results[0];
+
+                if (result && result.status === "Sent") {
+                    sent++;
+                } else {
+                    failed++;
+                }
+
+                sentCount.textContent = sent;
+                notSentCount.textContent = failed;
+
+                if (result) {
+                    renderResults([result, ...Array.from(resultsList.children).map(() => null)].filter(Boolean));
+                }
+
+                // Rebuild the visible result list without losing previous results.
+                if (result) {
+                    const currentResults = Array.from(resultsList.children);
+                    const item = document.createElement("div");
+                    item.className = "result-item";
+
+                    const email = document.createElement("span");
+                    email.className = "result-email";
+                    email.textContent = result.email;
+
+                    const variant = document.createElement("span");
+                    variant.className = "variant-result";
+                    variant.textContent = `V${result.variant}`;
+
+                    const status = document.createElement("span");
+                    status.className =
+                        result.status === "Sent"
+                            ? "tag-sent"
+                            : "tag-failed";
+                    status.textContent = result.status;
+
+                    item.appendChild(email);
+                    item.appendChild(variant);
+                    item.appendChild(status);
+                    resultsList.appendChild(item);
+                }
+
+            } catch (error) {
+                failed++;
+                notSentCount.textContent = failed;
+
+                const item = document.createElement("div");
+                item.className = "result-item";
+
+                const email = document.createElement("span");
+                email.className = "result-email";
+                email.textContent = recipient;
+
+                const variant = document.createElement("span");
+                variant.className = "variant-result";
+                variant.textContent = "—";
+
+                const status = document.createElement("span");
+                status.className = "tag-failed";
+                status.textContent = "Failed";
+
+                item.appendChild(email);
+                item.appendChild(variant);
+                item.appendChild(status);
+                resultsList.appendChild(item);
+            }
+
+            if (index < recipients.length - 1) {
+                let remaining = 10;
+
+                for (let seconds = remaining; seconds > 0; seconds--) {
+                    progress.innerHTML = `
+                        <strong>Status:</strong>
+                        <span>Completed ${index + 1} / ${recipients.length} — next email in ${seconds}s</span>
+                    `;
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
         }
-
-        sentCount.textContent = data.sent || 0;
-        notSentCount.textContent = data.failed || 0;
 
         progress.innerHTML = `
             <strong>Status:</strong>
-            <span>
-                Completed — ${data.total || recipients.length} processed
-            </span>
+            <span>Completed — ${recipients.length} processed</span>
         `;
 
-        renderResults(data.results || []);
-
-        document.getElementById("recipients").value = "";
+        // Clear recipients only after the entire batch is finished.
+        document.getElementById("sendTo").value = "";
 
     } catch (error) {
         progress.innerHTML = `
             <strong>Status:</strong>
             <span class="tag-failed">Sending failed</span>
         `;
-
         alert(error.message || "Unable to send emails.");
     } finally {
         sendBtn.disabled = false;
