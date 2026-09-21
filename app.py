@@ -5,13 +5,16 @@ from flask import Flask, request, jsonify, send_file
 
 app = Flask(__name__)
 
+
 @app.get("/")
 def home():
     return send_file("index.html")
 
+
 @app.get("/api/send")
 def api_status():
     return jsonify({"status": "Mail API is running"})
+
 
 @app.post("/api/send")
 def send_email():
@@ -21,29 +24,57 @@ def send_email():
         sender = data.get("from", "").strip()
         recipients = data.get("to", [])
         reply_to = data.get("reply_to", "").strip()
-        subject = data.get("subject", "").strip()
-        email_body = data.get("body", "")
+        variants = data.get("variants", [])
 
         if isinstance(recipients, str):
-            recipients = [x.strip() for x in recipients.splitlines() if x.strip()]
+            recipients = [
+                x.strip()
+                for x in recipients.splitlines()
+                if x.strip()
+            ]
 
         api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
         account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
 
         if not api_token:
-            return jsonify({"error": "CLOUDFLARE_API_TOKEN is not configured."}), 500
+            return jsonify({
+                "error": "CLOUDFLARE_API_TOKEN is not configured."
+            }), 500
 
         if not account_id:
-            return jsonify({"error": "CLOUDFLARE_ACCOUNT_ID is not configured."}), 500
+            return jsonify({
+                "error": "CLOUDFLARE_ACCOUNT_ID is not configured."
+            }), 500
 
         if not sender:
             return jsonify({"error": "Send From is required."}), 400
 
         if not recipients:
-            return jsonify({"error": "At least one recipient is required."}), 400
+            return jsonify({
+                "error": "At least one recipient is required."
+            }), 400
 
-        if not subject:
-            return jsonify({"error": "Subject is required."}), 400
+        if not isinstance(variants, list) or not variants:
+            return jsonify({
+                "error": "At least one email variant is required."
+            }), 400
+
+        cleaned_variants = []
+
+        for variant in variants[:5]:
+            subject = str(variant.get("subject", "")).strip()
+            body = str(variant.get("body", ""))
+
+            if subject and body.strip():
+                cleaned_variants.append({
+                    "subject": subject,
+                    "body": body
+                })
+
+        if not cleaned_variants:
+            return jsonify({
+                "error": "At least one complete subject/body variant is required."
+            }), 400
 
         cloudflare_url = (
             "https://api.cloudflare.com/client/v4/accounts/"
@@ -55,65 +86,107 @@ def send_email():
             "Content-Type": "application/json",
         }
 
-        payload = {
-            "from": {"address": sender, "name": "Ashley Mok"},
-            "to": recipients,
-            "subject": subject,
-            "text": email_body,
-            "html": "<p>" + html.escape(email_body).replace("\n", "<br>") + "</p>",
-        }
+        results = []
+        sent = 0
+        failed = 0
 
+        # Shuffle variants independently for each recipient.
+        import random
 
-        if reply_to:
-            payload["reply_to"] = reply_to
+        shuffled_variants = []
 
-        response = requests.post(
-            cloudflare_url,
-            headers=headers,
-            json=payload,
-            timeout=30,
-        )
+        while len(shuffled_variants) < len(recipients):
+            batch = list(range(len(cleaned_variants)))
+            random.shuffle(batch)
+            shuffled_variants.extend(batch)
 
-        try:
-            response_data = response.json()
-        except Exception:
-            response_data = {}
+        for index, recipient in enumerate(recipients):
+            variant_index = shuffled_variants[index]
+            variant = cleaned_variants[variant_index]
 
-        if response.ok and response_data.get("success") is True:
-            result = response_data.get("result", {})
+            payload = {
+                "from": {
+                    "address": sender,
+                    "name": "Ashley Mok"
+                },
+                "to": [recipient],
+                "subject": variant["subject"],
+                "text": variant["body"],
+                "html": (
+                    "<p>"
+                    + html.escape(variant["body"])
+                    .replace("\n", "<br>")
+                    + "</p>"
+                ),
+            }
 
-            delivered = result.get("delivered", [])
-            queued = result.get("queued", [])
-            failed = result.get("permanent_bounces", [])
+            if reply_to:
+                payload["reply_to"] = reply_to
 
-            results = []
+            try:
+                response = requests.post(
+                    cloudflare_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
 
-            for email in delivered:
-                results.append({"email": email, "status": "Sent"})
+                try:
+                    response_data = response.json()
+                except Exception:
+                    response_data = {}
 
-            for email in queued:
-                results.append({"email": email, "status": "Sent"})
+                if response.ok and response_data.get("success") is True:
+                    sent += 1
 
-            for email in failed:
-                results.append({"email": email, "status": "Failed"})
+                    result = response_data.get("result", {})
 
-            return jsonify({
-                "success": True,
-                "results": results,
-                "sent": len(delivered) + len(queued),
-                "queued": len(queued),
-                "failed": len(failed),
-                "total": len(recipients),
-                "message_id": result.get("message_id"),
-            })
+                    results.append({
+                        "email": recipient,
+                        "status": "Sent",
+                        "variant": variant_index + 1,
+                        "message_id": result.get("message_id"),
+                    })
+                else:
+                    failed += 1
+
+                    results.append({
+                        "email": recipient,
+                        "status": "Failed",
+                        "variant": variant_index + 1,
+                        "error": response_data.get(
+                            "errors",
+                            response.text
+                        ),
+                    })
+
+            except Exception as exc:
+                failed += 1
+
+                results.append({
+                    "email": recipient,
+                    "status": "Failed",
+                    "variant": variant_index + 1,
+                    "error": str(exc),
+                })
 
         return jsonify({
-            "success": False,
-            "error": response_data.get("errors", response.text),
-        }), response.status_code
+            "success": failed == 0,
+            "results": results,
+            "sent": sent,
+            "failed": failed,
+            "total": len(recipients),
+        })
 
     except Exception as exc:
         return jsonify({
             "success": False,
             "error": str(exc),
         }), 500
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000))
+    )
