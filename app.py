@@ -23,7 +23,7 @@ def send_email():
     try:
         data = request.get_json(force=True)
 
-        sender = data.get("from", "").strip()
+        sender = data.get("sender") or {}
         recipients = data.get("to", [])
         variants = data.get("variants", [])
 
@@ -34,36 +34,38 @@ def send_email():
                 if x.strip()
             ]
 
-        api_token = os.environ.get("CLOUDFLARE_API_TOKEN")
-        account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-
-        if not api_token:
+        if not isinstance(sender, dict):
             return jsonify({
-                "error": "CLOUDFLARE_API_TOKEN is not configured."
-            }), 500
+                "error": "A valid sender is required."
+            }), 400
 
-        if not account_id:
+        sender_id = str(sender.get("id", "")).strip()
+        sender_name = str(sender.get("name", "")).strip()
+        sender_address = str(sender.get("email", "")).strip()
+        provider = str(sender.get("provider", "")).strip().lower()
+
+        if not sender_id:
             return jsonify({
-                "error": "CLOUDFLARE_ACCOUNT_ID is not configured."
-            }), 500
+                "error": "Sender ID is required."
+            }), 400
 
-        if not sender:
-            return jsonify({"error": "Send From is required."}), 400
+        if not sender_address:
+            return jsonify({
+                "error": "Sender email address is required."
+            }), 400
 
-        sender_match = re.match(
-            r'^\s*(?:(.*?)\s*)?<([^<>]+)>\s*$',
-            sender
-        )
+        if not re.match(
+            r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$",
+            sender_address
+        ):
+            return jsonify({
+                "error": "Invalid sender email address."
+            }), 400
 
-        if sender_match:
-            sender_name = (sender_match.group(1) or "").strip()
-            sender_address = sender_match.group(2).strip()
-        else:
-            sender_name = ""
-            sender_address = sender.strip()
-
-        if not re.match(r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$", sender_address):
-            return jsonify({"error": "Invalid Send From email address."}), 400
+        if provider not in ("cloudflare", "resend"):
+            return jsonify({
+                "error": "Unsupported sender provider."
+            }), 400
 
         if not recipients:
             return jsonify({
@@ -78,8 +80,16 @@ def send_email():
         cleaned_variants = []
 
         for variant in variants:
-            subject = str(variant.get("subject", "")).strip()
-            body = str(variant.get("body", ""))
+            if not isinstance(variant, dict):
+                continue
+
+            subject = str(
+                variant.get("subject", "")
+            ).strip()
+
+            body = str(
+                variant.get("body", "")
+            )
 
             if subject and body.strip():
                 cleaned_variants.append({
@@ -89,30 +99,90 @@ def send_email():
 
         if not cleaned_variants:
             return jsonify({
-                "error": "At least one complete subject/body variant is required."
+                "error": (
+                    "At least one complete "
+                    "subject/body variant is required."
+                )
             }), 400
 
-        cloudflare_url = (
-            "https://api.cloudflare.com/client/v4/accounts/"
-            f"{account_id}/email/sending/send"
+        # Credentials remain server-side in Vercel.
+        cloudflare_token = os.environ.get(
+            "CLOUDFLARE_API_TOKEN"
         )
 
-        headers = {
-            "Authorization": f"Bearer {api_token}",
-            "Content-Type": "application/json",
-        }
+        cloudflare_account_id = os.environ.get(
+            "CLOUDFLARE_ACCOUNT_ID"
+        )
+
+        resend_api_key = os.environ.get(
+            "RESEND_API_KEY"
+        )
+
+        if provider == "cloudflare":
+            if not cloudflare_token:
+                return jsonify({
+                    "error": (
+                        "CLOUDFLARE_API_TOKEN "
+                        "is not configured."
+                    ),
+                    "sender_failed": True,
+                    "sender_id": sender_id
+                }), 500
+
+            if not cloudflare_account_id:
+                return jsonify({
+                    "error": (
+                        "CLOUDFLARE_ACCOUNT_ID "
+                        "is not configured."
+                    ),
+                    "sender_failed": True,
+                    "sender_id": sender_id
+                }), 500
+
+            api_url = (
+                "https://api.cloudflare.com/client/v4/accounts/"
+                f"{cloudflare_account_id}/email/sending/send"
+            )
+
+            headers = {
+                "Authorization": (
+                    f"Bearer {cloudflare_token}"
+                ),
+                "Content-Type": "application/json",
+            }
+
+        else:
+            if not resend_api_key:
+                return jsonify({
+                    "error": (
+                        "RESEND_API_KEY "
+                        "is not configured."
+                    ),
+                    "sender_failed": True,
+                    "sender_id": sender_id
+                }), 500
+
+            api_url = "https://api.resend.com/emails"
+
+            headers = {
+                "Authorization": (
+                    f"Bearer {resend_api_key}"
+                ),
+                "Content-Type": "application/json",
+            }
 
         results = []
         sent = 0
         failed = 0
 
-        # Shuffle variants independently for each recipient.
         import random
 
         shuffled_variants = []
 
         while len(shuffled_variants) < len(recipients):
-            batch = list(range(len(cleaned_variants)))
+            batch = list(
+                range(len(cleaned_variants))
+            )
             random.shuffle(batch)
             shuffled_variants.extend(batch)
 
@@ -120,26 +190,55 @@ def send_email():
             variant_index = shuffled_variants[index]
             variant = cleaned_variants[variant_index]
 
-            payload = {
-                "from": {
-                    "address": sender_address,
-                    "name": sender_name
-                },
-                "to": [recipient],
-                "subject": variant["subject"],
-                "text": variant["body"],
-                "html": (
-                    "<p>"
-                    + html.escape(variant["body"])
-                    .replace("\n", "<br>")
-                    + "</p>"
-                ),
-            }
+            if provider == "cloudflare":
+                payload = {
+                    "from": {
+                        "address": sender_address,
+                        "name": sender_name
+                    },
+                    "to": [recipient],
+                    "subject": variant["subject"],
+                    "text": variant["body"],
+                    "html": (
+                        "<p>"
+                        + html.escape(
+                            variant["body"]
+                        ).replace(
+                            "\n",
+                            "<br>"
+                        )
+                        + "</p>"
+                    ),
+                }
 
+            else:
+                from_value = (
+                    f"{sender_name} "
+                    f"<{sender_address}>"
+                    if sender_name
+                    else sender_address
+                )
+
+                payload = {
+                    "from": from_value,
+                    "to": [recipient],
+                    "subject": variant["subject"],
+                    "text": variant["body"],
+                    "html": (
+                        "<p>"
+                        + html.escape(
+                            variant["body"]
+                        ).replace(
+                            "\n",
+                            "<br>"
+                        )
+                        + "</p>"
+                    ),
+                }
 
             try:
                 response = requests.post(
-                    cloudflare_url,
+                    api_url,
                     headers=headers,
                     json=payload,
                     timeout=30,
@@ -150,29 +249,110 @@ def send_email():
                 except Exception:
                     response_data = {}
 
-                if response.ok and response_data.get("success") is True:
+                if provider == "cloudflare":
+                    provider_success = (
+                        response.ok
+                        and response_data.get("success") is True
+                    )
+                else:
+                    provider_success = (
+                        response.ok
+                        and bool(
+                            response_data.get("id")
+                        )
+                    )
+
+                if provider_success:
                     sent += 1
 
-                    result = response_data.get("result", {})
+                    if provider == "cloudflare":
+                        result_data = (
+                            response_data.get(
+                                "result",
+                                {}
+                            )
+                        )
+
+                        message_id = (
+                            result_data.get(
+                                "message_id"
+                            )
+                        )
+                    else:
+                        message_id = (
+                            response_data.get("id")
+                        )
 
                     results.append({
                         "email": recipient,
                         "status": "Sent",
                         "variant": variant_index + 1,
-                        "message_id": result.get("message_id"),
+                        "message_id": message_id,
+                        "sender_id": sender_id,
+                        "sender": sender_address,
+                        "provider": provider,
                     })
+
                 else:
                     failed += 1
+
+                    error_data = (
+                        response_data.get(
+                            "errors"
+                        )
+                        if provider == "cloudflare"
+                        else response_data.get(
+                            "message"
+                        )
+                    )
+
+                    if not error_data:
+                        error_data = response.text
+
+                    # A provider/authentication/configuration
+                    # failure can invalidate the sender.
+                    sender_failed = (
+                        response.status_code
+                        in (401, 403, 422)
+                    )
 
                     results.append({
                         "email": recipient,
                         "status": "Failed",
                         "variant": variant_index + 1,
-                        "error": response_data.get(
-                            "errors",
-                            response.text
-                        ),
+                        "error": error_data,
+                        "sender_id": sender_id,
+                        "sender": sender_address,
+                        "provider": provider,
+                        "sender_failed": sender_failed,
                     })
+
+                    if sender_failed:
+                        return jsonify({
+                            "success": False,
+                            "results": results,
+                            "sent": sent,
+                            "failed": failed,
+                            "total": len(recipients),
+                            "sender_failed": True,
+                            "sender_id": sender_id,
+                            "sender": sender_address,
+                            "provider": provider,
+                        }), 502
+
+            except requests.RequestException as exc:
+                failed += 1
+
+                results.append({
+                    "email": recipient,
+                    "status": "Failed",
+                    "variant": variant_index + 1,
+                    "error": str(exc),
+                    "sender_id": sender_id,
+                    "sender": sender_address,
+                    "provider": provider,
+                    "sender_failed": False,
+                })
 
             except Exception as exc:
                 failed += 1
@@ -182,6 +362,10 @@ def send_email():
                     "status": "Failed",
                     "variant": variant_index + 1,
                     "error": str(exc),
+                    "sender_id": sender_id,
+                    "sender": sender_address,
+                    "provider": provider,
+                    "sender_failed": False,
                 })
 
         return jsonify({
@@ -190,6 +374,10 @@ def send_email():
             "sent": sent,
             "failed": failed,
             "total": len(recipients),
+            "sender_failed": False,
+            "sender_id": sender_id,
+            "sender": sender_address,
+            "provider": provider,
         })
 
     except Exception as exc:

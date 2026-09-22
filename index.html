@@ -214,10 +214,17 @@ button:disabled {
 
     <div class="form-group">
         <label>Send From</label>
-        <input
-            type="text"
-            id="sendFrom"
-            value="Ashley Mok &lt;info@creativeworkgroup.org&gt;">
+
+        <div id="senderPool"></div>
+
+        <button
+            type="button"
+            id="addSenderBtn"
+            style="width:auto;padding:10px 16px;margin-top:10px;"
+            onclick="addSender()"
+        >
+            ＋ ADD SENDER
+        </button>
     </div>
 
     <div class="form-group">
@@ -686,7 +693,6 @@ async function processQueue() {
     updateQueueControls();
 
     const {
-        sendFrom,
         variants,
         recipients
     } = mailQueue;
@@ -724,13 +730,52 @@ async function processQueue() {
                         "Content-Type": "application/json"
                     },
                     body: JSON.stringify({
-                        from: sendFrom,
+                        sender: getNextSender(),
                         to: [recipient],
-variants
+                        variants
                     })
                 });
 
                 const data = await response.json();
+
+                if (data.sender_failed && data.sender_id) {
+                    markSenderDead(data.sender_id);
+
+                    const deadSender = senderPool.find(
+                        sender => sender.id === data.sender_id
+                    );
+
+                    updateQueueStatus(
+                        `Sender ${deadSender?.email || "unknown"} marked DEAD — continuing`
+                    );
+
+                    mailQueue.failed++;
+
+                    addQueueResult({
+                        email: recipient,
+                        status: "Failed",
+                        variant:
+                            data.results &&
+                            data.results.length &&
+                            data.results[0].variant
+                                ? data.results[0].variant
+                                : "—",
+                        error:
+                            data.error ||
+                            (
+                                data.results &&
+                                data.results.length
+                                    ? data.results[0].error
+                                    : "Sender failed"
+                            ),
+                        sender: data.sender,
+                        provider: data.provider,
+                        sender_failed: true
+                    });
+
+                    mailQueue.index++;
+                    continue;
+                }
 
                 const result =
                     data.results && data.results.length
@@ -812,6 +857,200 @@ variants
     }
 }
 
+
+const SENDER_STORAGE_KEY = "creativeworkgroup_sender_pool";
+
+let senderPool = [];
+
+function loadSenders() {
+    try {
+        const saved = JSON.parse(
+            localStorage.getItem(SENDER_STORAGE_KEY) || "[]"
+        );
+
+        if (Array.isArray(saved) && saved.length) {
+            return saved;
+        }
+    } catch (_) {}
+
+    return [{
+        id: crypto.randomUUID(),
+        name: "Ashley Mok",
+        email: "info@creativeworkgroup.org",
+        provider: "cloudflare",
+        status: "active"
+    }];
+}
+
+senderPool = loadSenders();
+
+function saveSenders() {
+    localStorage.setItem(
+        SENDER_STORAGE_KEY,
+        JSON.stringify(senderPool)
+    );
+}
+
+function renderSenders() {
+    const container = document.getElementById("senderPool");
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    senderPool.forEach((sender, index) => {
+        const row = document.createElement("div");
+
+        row.style.cssText =
+            "border:1px solid var(--border,#ddd);" +
+            "border-radius:10px;padding:10px;margin-bottom:10px;";
+
+        const fields = document.createElement("div");
+
+        fields.style.cssText =
+            "display:grid;" +
+            "grid-template-columns:1fr 1fr 150px auto;" +
+            "gap:8px;align-items:center;";
+
+        fields.innerHTML = `
+            <input
+                type="text"
+                value="${escapeHtml(sender.name)}"
+                placeholder="Sender name"
+                onchange="updateSender(${index}, 'name', this.value)"
+            >
+
+            <input
+                type="email"
+                value="${escapeHtml(sender.email)}"
+                placeholder="sender@example.com"
+                onchange="updateSender(${index}, 'email', this.value)"
+            >
+
+            <select onchange="updateSender(${index}, 'provider', this.value)">
+                <option value="cloudflare" ${sender.provider === "cloudflare" ? "selected" : ""}>
+                    Cloudflare
+                </option>
+                <option value="resend" ${sender.provider === "resend" ? "selected" : ""}>
+                    Resend
+                </option>
+            </select>
+
+            <button
+                type="button"
+                onclick="deleteSender(${index})"
+                style="width:auto;padding:8px 12px;"
+            >
+                DELETE
+            </button>
+        `;
+
+        const status = document.createElement("div");
+
+        status.style.cssText =
+            "margin-top:7px;font-size:13px;font-weight:600;" +
+            (sender.status === "dead"
+                ? "color:#d93025;"
+                : "color:#16803c;");
+
+        status.textContent =
+            sender.status === "dead"
+                ? "🔴 DEAD"
+                : "● ACTIVE";
+
+        row.appendChild(fields);
+        row.appendChild(status);
+        container.appendChild(row);
+    });
+
+    saveSenders();
+}
+
+function escapeHtml(value) {
+    return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function addSender() {
+    senderPool.push({
+        id: crypto.randomUUID(),
+        name: "",
+        email: "",
+        provider: "cloudflare",
+        status: "active"
+    });
+
+    saveSenders();
+    renderSenders();
+}
+
+function updateSender(index, field, value) {
+    if (!senderPool[index]) return;
+
+    senderPool[index][field] = value.trim();
+
+    if (field === "name" || field === "email" || field === "provider") {
+        senderPool[index].status = "active";
+    }
+
+    saveSenders();
+    renderSenders();
+}
+
+function deleteSender(index) {
+    senderPool.splice(index, 1);
+    saveSenders();
+    renderSenders();
+}
+
+function getSenders() {
+    return senderPool.filter(sender =>
+        sender.status !== "dead" &&
+        sender.email &&
+        sender.email.includes("@")
+    );
+}
+
+function getNextSender() {
+    const active = getSenders();
+
+    if (!active.length) {
+        throw new Error("No active senders available.");
+    }
+
+    const index =
+        mailQueue.senderIndex % active.length;
+
+    const sender = active[index];
+
+    mailQueue.senderIndex++;
+
+    return {
+        id: sender.id,
+        name: sender.name,
+        email: sender.email,
+        provider: sender.provider
+    };
+}
+
+function markSenderDead(senderId) {
+    const sender = senderPool.find(
+        item => item.id === senderId
+    );
+
+    if (!sender) return;
+
+    sender.status = "dead";
+
+    saveSenders();
+    renderSenders();
+}
+
+renderSenders();
+
 async function startSending() {
     if (mailQueue && !queueStopped) {
         if (queuePaused) {
@@ -823,10 +1062,7 @@ async function startSending() {
 
     const sendBtn = document.getElementById("sendBtn");
 
-    const sendFrom = document
-        .getElementById("sendFrom")
-        .value
-        .trim();
+    const senders = getSenders();
 const rawTo = document
         .getElementById("sendTo")
         .value;
@@ -843,8 +1079,8 @@ const rawTo = document
 
     const variants = getVariants();
 
-    if (!sendFrom) {
-        alert("Please enter a Send From email address.");
+    if (senders.length === 0) {
+        alert("Please add at least one active sender.");
         return;
     }
 
@@ -876,7 +1112,8 @@ const rawTo = document
     resultsList.innerHTML = "";
 
     mailQueue = {
-        sendFrom,
+        senders,
+        senderIndex: 0,
         variants,
         recipients,
         index: 0,
