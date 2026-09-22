@@ -77,7 +77,7 @@ def send_email():
 
         cleaned_variants = []
 
-        for variant in variants[:5]:
+        for variant in variants:
             subject = str(variant.get("subject", "")).strip()
             body = str(variant.get("body", ""))
 

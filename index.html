@@ -227,6 +227,17 @@ button:disabled {
 
     <div id="variants"></div>
 
+    <div style="display:flex;justify-content:flex-end;margin:14px 0 10px;">
+        <button
+            type="button"
+            id="addVariantBtn"
+            style="width:auto;padding:10px 16px;"
+            onclick="addVariant()"
+        >
+            ＋ ADD SUBJECT & EMAIL
+        </button>
+    </div>
+
     <div class="section-title">Recipients</div>
 
     <div class="form-group">
@@ -383,6 +394,52 @@ defaultVariants.forEach((item, index) => {
     document.getElementById(`subject${i}`).value = item.subject;
     document.getElementById(`body${i}`).value = item.body;
 });
+
+
+function addVariant() {
+    const container = document.getElementById("variants");
+
+    const card = document.createElement("div");
+    card.className = "variant-card";
+
+    card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <strong>New Variant</strong>
+            <button
+                type="button"
+                onclick="this.closest('.variant-card').remove(); renumberVariants();"
+                style="width:auto;padding:6px 10px;"
+            >
+                DELETE
+            </button>
+        </div>
+
+        <label>Subject</label>
+        <input
+            type="text"
+            class="variant-subject"
+            placeholder="Email subject"
+        >
+
+        <label>Email</label>
+        <textarea
+            class="variant-body"
+            placeholder="Email body"
+        ></textarea>
+    `;
+
+    container.appendChild(card);
+    renumberVariants();
+}
+
+function renumberVariants() {
+    document.querySelectorAll("#variants .variant-card").forEach((card, index) => {
+        const title = card.querySelector("strong");
+        if (title) {
+            title.textContent = `Variant ${index + 1}`;
+        }
+    });
+}
 
 function getVariants() {
     const variants = [];
