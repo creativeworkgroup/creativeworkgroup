@@ -1,9 +1,15 @@
 import re
 import os
+from pathlib import Path
 import time
 import html
 import requests
+from dotenv import load_dotenv
+from cryptography.fernet import Fernet
+from supabase import create_client
 from flask import Flask, request, jsonify, send_file
+
+load_dotenv(Path(__file__).resolve().parent / '.env.local', override=True)
 
 app = Flask(__name__)
 
@@ -16,6 +22,215 @@ def home():
 @app.get("/api/send")
 def api_status():
     return jsonify({"status": "Mail API is running"})
+
+
+
+
+def get_encryption_key():
+    key = os.environ.get("SENDER_CONFIG_ENCRYPTION_KEY")
+    if not key:
+        raise RuntimeError(
+            "SENDER_CONFIG_ENCRYPTION_KEY is not configured."
+        )
+    return key.encode()
+
+
+def get_supabase():
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+
+    if not url or not key:
+        raise RuntimeError(
+            "Supabase environment variables are not configured."
+        )
+
+    return create_client(url, key)
+
+
+def encrypt_credential(value):
+    cipher = Fernet(get_encryption_key())
+    return cipher.encrypt(value.encode()).decode()
+
+
+def decrypt_credential(value):
+    cipher = Fernet(get_encryption_key())
+    return cipher.decrypt(value.encode()).decode()
+
+
+def public_sender(row):
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "email": row["email"],
+        "provider": row["provider"],
+        "status": row["status"],
+    }
+
+
+def get_sender_store():
+    db = get_supabase()
+
+    response = (
+        db.table("senders")
+        .select("*")
+        .order("created_at")
+        .execute()
+    )
+
+    store = {}
+
+    for row in response.data or []:
+        store[row["id"]] = {
+            "id": row["id"],
+            "name": row["name"],
+            "email": row["email"],
+            "provider": row["provider"],
+            "credential": decrypt_credential(row["credential"]),
+            "account_id": row.get("account_id"),
+            "status": row["status"],
+        }
+
+    return store
+
+
+def mark_sender_dead(sender_id):
+    if not sender_id:
+        return
+
+    try:
+        db = get_supabase()
+
+        (
+            db.table("senders")
+            .update({"status": "dead"})
+            .eq("id", sender_id)
+            .execute()
+        )
+    except Exception:
+        pass
+
+
+@app.get("/api/senders")
+def get_senders():
+    try:
+        db = get_supabase()
+
+        response = (
+            db.table("senders")
+            .select("id,name,email,provider,status")
+            .order("created_at")
+            .execute()
+        )
+
+        return jsonify({
+            "success": True,
+            "senders": [
+                public_sender(row)
+                for row in (response.data or [])
+            ]
+        })
+
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc)
+        }), 500
+
+
+@app.post("/api/senders")
+def add_sender():
+    try:
+        data = request.get_json(silent=True) or {}
+
+        name = str(data.get("name", "")).strip()
+        email = str(data.get("email", "")).strip()
+        provider = str(data.get("provider", "")).strip().lower()
+        credential = str(data.get("credential", "")).strip()
+        account_id = str(data.get("account_id", "")).strip() or None
+
+        if not name or not email or not credential:
+            return jsonify({
+                "success": False,
+                "error": "Name, email and credential are required."
+            }), 400
+
+        if not re.match(
+            r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$",
+            email
+        ):
+            return jsonify({
+                "success": False,
+                "error": "Invalid sender email address."
+            }), 400
+
+        if provider not in ("cloudflare", "resend"):
+            return jsonify({
+                "success": False,
+                "error": "Unsupported sender provider."
+            }), 400
+
+        if provider == "cloudflare" and not account_id:
+            return jsonify({
+                "success": False,
+                "error": "Cloudflare account ID is required."
+            }), 400
+
+        db = get_supabase()
+
+        row = {
+            "name": name,
+            "email": email,
+            "provider": provider,
+            "credential": encrypt_credential(credential),
+            "account_id": account_id,
+            "status": "active",
+        }
+
+        response = (
+            db.table("senders")
+            .insert(row)
+            .execute()
+        )
+
+        if not response.data:
+            return jsonify({
+                "success": False,
+                "error": "Failed to save sender."
+            }), 500
+
+        return jsonify({
+            "success": True,
+            "sender": public_sender(response.data[0])
+        }), 201
+
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc)
+        }), 500
+
+
+@app.delete("/api/senders/<sender_id>")
+def remove_sender(sender_id):
+    try:
+        db = get_supabase()
+
+        (
+            db.table("senders")
+            .delete()
+            .eq("id", sender_id)
+            .execute()
+        )
+
+        return jsonify({
+            "success": True
+        })
+
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc)
+        }), 500
 
 
 @app.post("/api/send")
@@ -40,134 +255,99 @@ def send_email():
             }), 400
 
         sender_id = str(sender.get("id", "")).strip()
-        sender_name = str(sender.get("name", "")).strip()
-        sender_address = str(sender.get("email", "")).strip()
-        provider = str(sender.get("provider", "")).strip().lower()
 
         if not sender_id:
             return jsonify({
                 "error": "Sender ID is required."
             }), 400
 
+        # Sender identity and credentials are resolved exclusively
+        # from the server-side Supabase store. Never trust the
+        # provider, email, name, or credential supplied by the browser.
+        sender_store = get_sender_store()
+        stored_sender = sender_store.get(sender_id)
+
+        if not stored_sender:
+            return jsonify({
+                "error": "Sender was not found."
+            }), 404
+
+        if stored_sender.get("status") == "dead":
+            return jsonify({
+                "error": "This sender is marked DEAD and cannot be used.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 409
+
+        sender_name = str(
+            stored_sender.get("name", "")
+        ).strip()
+
+        sender_address = str(
+            stored_sender.get("email", "")
+        ).strip()
+
+        provider = str(
+            stored_sender.get("provider", "")
+        ).strip().lower()
+
+        sender_credential = stored_sender.get("credential")
+        sender_account_id = stored_sender.get("account_id")
+
         if not sender_address:
             return jsonify({
-                "error": "Sender email address is required."
-            }), 400
+                "error": "Sender email address is not configured.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
 
         if not re.match(
             r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$",
             sender_address
         ):
             return jsonify({
-                "error": "Invalid sender email address."
-            }), 400
+                "error": "Invalid sender email address.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
 
         if provider not in ("cloudflare", "resend"):
             return jsonify({
-                "error": "Unsupported sender provider."
-            }), 400
+                "error": "Unsupported sender provider.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
 
-        if not recipients:
+        if not sender_credential:
             return jsonify({
-                "error": "At least one recipient is required."
-            }), 400
-
-        if not isinstance(variants, list) or not variants:
-            return jsonify({
-                "error": "At least one email variant is required."
-            }), 400
-
-        cleaned_variants = []
-
-        for variant in variants:
-            if not isinstance(variant, dict):
-                continue
-
-            subject = str(
-                variant.get("subject", "")
-            ).strip()
-
-            body = str(
-                variant.get("body", "")
-            )
-
-            if subject and body.strip():
-                cleaned_variants.append({
-                    "subject": subject,
-                    "body": body
-                })
-
-        if not cleaned_variants:
-            return jsonify({
-                "error": (
-                    "At least one complete "
-                    "subject/body variant is required."
-                )
-            }), 400
-
-        # Credentials remain server-side in Vercel.
-        cloudflare_token = os.environ.get(
-            "CLOUDFLARE_API_TOKEN"
-        )
-
-        cloudflare_account_id = os.environ.get(
-            "CLOUDFLARE_ACCOUNT_ID"
-        )
-
-        resend_api_key = os.environ.get(
-            "RESEND_API_KEY"
-        )
+                "error": "Sender credential is not configured.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
 
         if provider == "cloudflare":
-            if not cloudflare_token:
+            if not sender_account_id:
                 return jsonify({
-                    "error": (
-                        "CLOUDFLARE_API_TOKEN "
-                        "is not configured."
-                    ),
-                    "sender_failed": True,
-                    "sender_id": sender_id
-                }), 500
-
-            if not cloudflare_account_id:
-                return jsonify({
-                    "error": (
-                        "CLOUDFLARE_ACCOUNT_ID "
-                        "is not configured."
-                    ),
+                    "error": "Cloudflare account ID is not configured.",
                     "sender_failed": True,
                     "sender_id": sender_id
                 }), 500
 
             api_url = (
                 "https://api.cloudflare.com/client/v4/accounts/"
-                f"{cloudflare_account_id}/email/sending/send"
+                f"{sender_account_id}/email/sending/send"
             )
 
             headers = {
-                "Authorization": (
-                    f"Bearer {cloudflare_token}"
-                ),
+                "Authorization": f"Bearer {sender_credential}",
                 "Content-Type": "application/json",
             }
 
         else:
-            if not resend_api_key:
-                return jsonify({
-                    "error": (
-                        "RESEND_API_KEY "
-                        "is not configured."
-                    ),
-                    "sender_failed": True,
-                    "sender_id": sender_id
-                }), 500
-
             api_url = "https://api.resend.com/emails"
 
             headers = {
-                "Authorization": (
-                    f"Bearer {resend_api_key}"
-                ),
+                "Authorization": f"Bearer {sender_credential}",
                 "Content-Type": "application/json",
             }
 
@@ -328,6 +508,8 @@ def send_email():
                     })
 
                     if sender_failed:
+                        mark_sender_dead(sender_id)
+
                         return jsonify({
                             "success": False,
                             "results": results,

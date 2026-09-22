@@ -1,2 +1,5 @@
 Flask
 requests
+cryptography
+supabase
+python-dotenv

@@ -203,6 +203,51 @@ button:disabled {
     color: var(--muted);
     white-space: nowrap;
 }
+
+.sender-row {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 14px;
+    margin-bottom:8px;
+    border:1px solid var(--border,#ddd);
+    border-radius:10px;
+}
+
+.sender-identity {
+    min-width:0;
+}
+
+.sender-name {
+    font-weight:600;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+.sender-status {
+    font-size:12px;
+    margin-top:4px;
+    font-weight:600;
+}
+
+.sender-active {
+    color:#16803c;
+}
+
+.sender-dead {
+    color:#d93025;
+}
+
+.sender-delete {
+    width:auto !important;
+    border:0;
+    background:transparent;
+    cursor:pointer;
+    font-size:18px;
+    padding:6px 8px !important;
+}
+
 </style>
 </head>
 
@@ -221,10 +266,113 @@ button:disabled {
             type="button"
             id="addSenderBtn"
             style="width:auto;padding:10px 16px;margin-top:10px;"
-            onclick="addSender()"
+            onclick="openSenderModal()"
         >
             ＋ ADD SENDER
         </button>
+    </div>
+
+    <div
+        id="senderModal"
+        style="
+            display:none;
+            position:fixed;
+            inset:0;
+            background:rgba(0,0,0,.55);
+            align-items:center;
+            justify-content:center;
+            z-index:9999;
+            padding:20px;
+        "
+    >
+        <div
+            style="
+                width:min(520px,100%);
+                background:var(--card,#fff);
+                border-radius:14px;
+                padding:24px;
+                box-sizing:border-box;
+            "
+        >
+            <h3 style="margin-top:0;">
+                Add Sender
+            </h3>
+
+            <label>Sender Name</label>
+            <input
+                id="senderNameInput"
+                type="text"
+                placeholder="Ashley Owen"
+            >
+
+            <label>Sender Email</label>
+            <input
+                id="senderEmailInput"
+                type="email"
+                placeholder="ashleyowen@example.com"
+            >
+
+            <label>Provider</label>
+            <select
+                id="senderProviderInput"
+                onchange="updateCredentialFields()"
+            >
+                <option value="cloudflare">
+                    Cloudflare
+                </option>
+                <option value="resend">
+                    Resend
+                </option>
+            </select>
+
+            <label id="senderCredentialLabel">
+                Cloudflare API Token
+            </label>
+
+            <input
+                id="senderCredentialInput"
+                type="password"
+                autocomplete="new-password"
+                placeholder="Enter credential"
+            >
+
+            <div id="senderAccountGroup">
+                <label>
+                    Cloudflare Account ID
+                </label>
+
+                <input
+                    id="senderAccountInput"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Enter Account ID"
+                >
+            </div>
+
+            <div
+                style="
+                    display:flex;
+                    justify-content:flex-end;
+                    gap:10px;
+                    margin-top:20px;
+                "
+            >
+                <button
+                    type="button"
+                    onclick="closeSenderModal()"
+                >
+                    CANCEL
+                </button>
+
+                <button
+                    type="button"
+                    id="saveSenderBtn"
+                    onclick="saveSender()"
+                >
+                    SAVE SENDER
+                </button>
+            </div>
+        </div>
     </div>
 
     <div class="form-group">
@@ -858,6 +1006,7 @@ async function processQueue() {
 }
 
 
+
 const SENDER_STORAGE_KEY = "creativeworkgroup_sender_pool";
 
 let senderPool = [];
@@ -868,18 +1017,12 @@ function loadSenders() {
             localStorage.getItem(SENDER_STORAGE_KEY) || "[]"
         );
 
-        if (Array.isArray(saved) && saved.length) {
+        if (Array.isArray(saved)) {
             return saved;
         }
     } catch (_) {}
 
-    return [{
-        id: crypto.randomUUID(),
-        name: "Ashley Mok",
-        email: "info@creativeworkgroup.org",
-        provider: "cloudflare",
-        status: "active"
-    }];
+    return [];
 }
 
 senderPool = loadSenders();
@@ -891,80 +1034,6 @@ function saveSenders() {
     );
 }
 
-function renderSenders() {
-    const container = document.getElementById("senderPool");
-    if (!container) return;
-
-    container.innerHTML = "";
-
-    senderPool.forEach((sender, index) => {
-        const row = document.createElement("div");
-
-        row.style.cssText =
-            "border:1px solid var(--border,#ddd);" +
-            "border-radius:10px;padding:10px;margin-bottom:10px;";
-
-        const fields = document.createElement("div");
-
-        fields.style.cssText =
-            "display:grid;" +
-            "grid-template-columns:1fr 1fr 150px auto;" +
-            "gap:8px;align-items:center;";
-
-        fields.innerHTML = `
-            <input
-                type="text"
-                value="${escapeHtml(sender.name)}"
-                placeholder="Sender name"
-                onchange="updateSender(${index}, 'name', this.value)"
-            >
-
-            <input
-                type="email"
-                value="${escapeHtml(sender.email)}"
-                placeholder="sender@example.com"
-                onchange="updateSender(${index}, 'email', this.value)"
-            >
-
-            <select onchange="updateSender(${index}, 'provider', this.value)">
-                <option value="cloudflare" ${sender.provider === "cloudflare" ? "selected" : ""}>
-                    Cloudflare
-                </option>
-                <option value="resend" ${sender.provider === "resend" ? "selected" : ""}>
-                    Resend
-                </option>
-            </select>
-
-            <button
-                type="button"
-                onclick="deleteSender(${index})"
-                style="width:auto;padding:8px 12px;"
-            >
-                DELETE
-            </button>
-        `;
-
-        const status = document.createElement("div");
-
-        status.style.cssText =
-            "margin-top:7px;font-size:13px;font-weight:600;" +
-            (sender.status === "dead"
-                ? "color:#d93025;"
-                : "color:#16803c;");
-
-        status.textContent =
-            sender.status === "dead"
-                ? "🔴 DEAD"
-                : "● ACTIVE";
-
-        row.appendChild(fields);
-        row.appendChild(status);
-        container.appendChild(row);
-    });
-
-    saveSenders();
-}
-
 function escapeHtml(value) {
     return String(value || "")
         .replace(/&/g, "&amp;")
@@ -974,36 +1043,238 @@ function escapeHtml(value) {
         .replace(/'/g, "&#039;");
 }
 
-function addSender() {
-    senderPool.push({
-        id: crypto.randomUUID(),
-        name: "",
-        email: "",
-        provider: "cloudflare",
-        status: "active"
+function renderSenders() {
+    const container = document.getElementById("senderPool");
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    senderPool.forEach((sender, index) => {
+        const row = document.createElement("div");
+
+        row.className = "sender-row";
+
+        row.innerHTML = `
+            <div class="sender-identity">
+                <div class="sender-name">
+                    ${escapeHtml(
+                        sender.name
+                        ? `${sender.name} <${sender.email}>`
+                        : sender.email
+                    )}
+                </div>
+
+                <div class="sender-status ${
+                    sender.status === "dead"
+                        ? "sender-dead"
+                        : "sender-active"
+                }">
+                    ${
+                        sender.status === "dead"
+                            ? "● DEAD"
+                            : "● ACTIVE"
+                    }
+                </div>
+            </div>
+
+            <button
+                type="button"
+                class="sender-delete"
+                title="Delete sender"
+                aria-label="Delete sender"
+                onclick="deleteSender(${index})"
+            >
+                🗑
+            </button>
+        `;
+
+        container.appendChild(row);
     });
 
     saveSenders();
-    renderSenders();
 }
 
-function updateSender(index, field, value) {
-    if (!senderPool[index]) return;
+function openSenderModal() {
+    const modal = document.getElementById("senderModal");
+    if (!modal) return;
 
-    senderPool[index][field] = value.trim();
+    document.getElementById("senderNameInput").value = "";
+    document.getElementById("senderEmailInput").value = "";
+    document.getElementById("senderCredentialInput").value = "";
+    document.getElementById("senderAccountInput").value = "";
 
-    if (field === "name" || field === "email" || field === "provider") {
-        senderPool[index].status = "active";
+    updateCredentialFields();
+
+    modal.style.display = "flex";
+}
+
+function closeSenderModal() {
+    const modal = document.getElementById("senderModal");
+    if (modal) {
+        modal.style.display = "none";
+    }
+}
+
+function updateCredentialFields() {
+    const provider =
+        document.getElementById("senderProviderInput").value;
+
+    const credentialLabel =
+        document.getElementById("senderCredentialLabel");
+
+    const accountGroup =
+        document.getElementById("senderAccountGroup");
+
+    if (provider === "cloudflare") {
+        credentialLabel.textContent =
+            "Cloudflare API Token";
+
+        accountGroup.style.display = "block";
+    } else {
+        credentialLabel.textContent =
+            "Resend API Key";
+
+        accountGroup.style.display = "none";
+    }
+}
+
+async function saveSender() {
+    const name =
+        document.getElementById("senderNameInput")
+            .value
+            .trim();
+
+    const email =
+        document.getElementById("senderEmailInput")
+            .value
+            .trim();
+
+    const provider =
+        document.getElementById("senderProviderInput")
+            .value;
+
+    const credential =
+        document.getElementById("senderCredentialInput")
+            .value
+            .trim();
+
+    const accountId =
+        document.getElementById("senderAccountInput")
+            .value
+            .trim();
+
+    if (!email) {
+        alert("Sender email is required.");
+        return;
     }
 
-    saveSenders();
-    renderSenders();
+    if (!credential) {
+        alert("Credential is required.");
+        return;
+    }
+
+    if (
+        provider === "cloudflare" &&
+        !accountId
+    ) {
+        alert("Cloudflare Account ID is required.");
+        return;
+    }
+
+    const saveButton =
+        document.getElementById("saveSenderBtn");
+
+    saveButton.disabled = true;
+    saveButton.textContent = "SAVING...";
+
+    try {
+        const response = await fetch("/api/senders", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                id: crypto.randomUUID(),
+                name,
+                email,
+                provider,
+                credential,
+                account_id: accountId
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(
+                data.error || "Unable to save sender."
+            );
+        }
+
+        senderPool.push({
+            id: data.sender.id,
+            name: data.sender.name,
+            email: data.sender.email,
+            provider: data.sender.provider,
+            status: "active"
+        });
+
+        saveSenders();
+        renderSenders();
+        closeSenderModal();
+
+    } catch (error) {
+        alert(
+            error.message ||
+            "Unable to save sender."
+        );
+    } finally {
+        saveButton.disabled = false;
+        saveButton.textContent = "SAVE SENDER";
+    }
 }
 
-function deleteSender(index) {
-    senderPool.splice(index, 1);
-    saveSenders();
-    renderSenders();
+async function deleteSender(index) {
+    const sender = senderPool[index];
+
+    if (!sender) return;
+
+    if (
+        !confirm(
+            `Delete ${sender.email}?`
+        )
+    ) {
+        return;
+    }
+
+    try {
+        const response = await fetch(
+            `/api/senders/${encodeURIComponent(sender.id)}`,
+            {
+                method: "DELETE"
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(
+                data.error ||
+                "Unable to delete sender."
+            );
+        }
+
+        senderPool.splice(index, 1);
+
+        saveSenders();
+        renderSenders();
+
+    } catch (error) {
+        alert(
+            error.message ||
+            "Unable to delete sender."
+        );
+    }
 }
 
 function getSenders() {
@@ -1018,11 +1289,14 @@ function getNextSender() {
     const active = getSenders();
 
     if (!active.length) {
-        throw new Error("No active senders available.");
+        throw new Error(
+            "No active senders available."
+        );
     }
 
     const index =
-        mailQueue.senderIndex % active.length;
+        mailQueue.senderIndex %
+        active.length;
 
     const sender = active[index];
 
