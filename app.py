@@ -254,6 +254,26 @@ def send_email():
                 "error": "A valid sender is required."
             }), 400
 
+        cleaned_variants = []
+
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+
+            subject = str(variant.get("subject", "")).strip()
+            body = str(variant.get("body", "")).strip()
+
+            if subject and body:
+                cleaned_variants.append({
+                    "subject": subject,
+                    "body": body
+                })
+
+        if not cleaned_variants:
+            return jsonify({
+                "error": "At least one complete subject/body variant is required."
+            }), 400
+
         sender_id = str(sender.get("id", "")).strip()
 
         if not sender_id:
