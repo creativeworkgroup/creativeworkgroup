@@ -122,13 +122,16 @@ def get_senders():
             .execute()
         )
 
-        return jsonify({
+        response_json = jsonify({
             "success": True,
             "senders": [
                 public_sender(row)
                 for row in (response.data or [])
             ]
         })
+        response_json.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response_json.headers["Pragma"] = "no-cache"
+        return response_json
 
     except Exception as exc:
         return jsonify({

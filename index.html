@@ -1007,32 +1007,38 @@ async function processQueue() {
 
 
 
-const SENDER_STORAGE_KEY = "creativeworkgroup_sender_pool";
-
 let senderPool = [];
 
-function loadSenders() {
+// Sender records are persisted server-side in Supabase.
+// Browser storage is intentionally not used, so every browser/profile/device
+// sees the same sender pool.
+async function loadSenders() {
     try {
-        const saved = JSON.parse(
-            localStorage.getItem(SENDER_STORAGE_KEY) || "[]"
-        );
+        const response = await fetch("/api/senders", {
+            method: "GET",
+            headers: { "Accept": "application/json" },
+            cache: "no-store"
+        });
 
-        if (Array.isArray(saved)) {
-            return saved;
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Unable to load senders.");
         }
-    } catch (_) {}
 
-    return [];
+        senderPool = Array.isArray(data.senders) ? data.senders : [];
+        renderSenders();
+    } catch (error) {
+        senderPool = [];
+        renderSenders();
+        console.error("Unable to load sender pool:", error);
+        alert(error.message || "Unable to load saved senders.");
+    }
 }
 
-senderPool = loadSenders();
-
-function saveSenders() {
-    localStorage.setItem(
-        SENDER_STORAGE_KEY,
-        JSON.stringify(senderPool)
-    );
-}
+// Kept as a compatibility no-op for existing sender actions.
+// Persistence is handled by the server API, not browser storage.
+function saveSenders() {}
 
 function escapeHtml(value) {
     return String(value || "")
@@ -1323,7 +1329,7 @@ function markSenderDead(senderId) {
     renderSenders();
 }
 
-renderSenders();
+loadSenders();
 
 async function startSending() {
     if (mailQueue && !queueStopped) {
