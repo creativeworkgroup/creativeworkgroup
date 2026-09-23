@@ -529,6 +529,7 @@ button:disabled {
             <div id="proxyEditHint" class="proxy-meta"></div>
             <div class="proxy-actions">
                 <button type="button" class="proxy-secondary" onclick="closeProxyModal()">CANCEL</button>
+                <button type="button" class="proxy-secondary" id="testProxyFormBtn" onclick="testProxyForm()">TEST CONNECTION</button>
                 <button type="button" id="saveProxyBtn" onclick="saveProxy()">SAVE PROXY</button>
             </div>
         </div>
@@ -701,6 +702,7 @@ const variantContainer = document.getElementById("variants");
 let proxyPool = [];
 let editingProxyId = null;
 let proxyManagerMode = "active";
+let proxyFormTestPassed = false;
 
 function showMailConsole() {
     document.getElementById("accessGate").style.display = "none";
@@ -850,6 +852,7 @@ function renderProxyManager() {
 
 function openProxyModal(proxyId = null) {
     editingProxyId = proxyId;
+    proxyFormTestPassed = false;
     const proxy = proxyId ? proxyPool.find(item => item.id === proxyId) : null;
 
     document.getElementById("proxyEditTitle").textContent =
@@ -871,6 +874,61 @@ function closeProxyModal() {
     editingProxyId = null;
 }
 
+["proxyAddressInput", "proxyPortInput", "proxyUsernameInput", "proxyPasswordInput"].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) {
+        input.addEventListener("input", () => {
+            proxyFormTestPassed = false;
+        });
+    }
+});
+
+async function testProxyForm() {
+    const address = document.getElementById("proxyAddressInput").value.trim();
+    const port = document.getElementById("proxyPortInput").value.trim();
+    const username = document.getElementById("proxyUsernameInput").value.trim();
+    const password = document.getElementById("proxyPasswordInput").value;
+
+    if (!address || !port) {
+        alert("Proxy address and port are required.");
+        return;
+    }
+
+    if (!password) {
+        alert(editingProxyId ? "Enter the proxy password to test this connection." : "Proxy password is required.");
+        return;
+    }
+
+    const button = document.getElementById("testProxyFormBtn");
+    const saveButton = document.getElementById("saveProxyBtn");
+    button.disabled = true;
+    saveButton.disabled = true;
+    button.textContent = "TESTING...";
+
+    try {
+        const response = await fetch("/api/proxies/test-connection", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({address, port, username, password})
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            proxyFormTestPassed = false;
+            throw new Error(data.error || "Proxy test failed.");
+        }
+        proxyFormTestPassed = true;
+        alert("Proxy is live and reachable.");
+    } catch (error) {
+        proxyFormTestPassed = false;
+        alert(error.message || "Proxy test failed.");
+    } finally {
+        button.disabled = false;
+        saveButton.disabled = false;
+        button.textContent = "TEST CONNECTION";
+    }
+}
+
+
 async function saveProxy() {
     const address = document.getElementById("proxyAddressInput").value.trim();
     const port = document.getElementById("proxyPortInput").value.trim();
@@ -884,6 +942,11 @@ async function saveProxy() {
 
     if (!editingProxyId && !password) {
         alert("Proxy password is required.");
+        return;
+    }
+
+    if (!proxyFormTestPassed) {
+        alert("Please test the proxy connection successfully before saving.");
         return;
     }
 

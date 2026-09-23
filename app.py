@@ -361,6 +361,59 @@ def get_proxies():
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+def test_proxy_connection(address, port, username="", password=""):
+    from urllib.parse import quote
+
+    auth = ""
+    if username:
+        auth = f"{quote(username, safe='')}:{quote(password, safe='')}@"
+
+    proxy_url = f"http://{auth}{address}:{port}"
+    proxies = {"http": proxy_url, "https": proxy_url}
+
+    response = requests.get(
+        "https://www.cloudflare.com/cdn-cgi/trace",
+        proxies=proxies,
+        timeout=15,
+    )
+
+    if not response.ok:
+        raise RuntimeError(f"Proxy returned HTTP {response.status_code}.")
+
+    return True
+
+
+@app.post("/api/proxies/test-connection")
+def test_proxy_connection_api():
+    denied = require_access()
+    if denied:
+        return denied
+
+    try:
+        data = request.get_json(silent=True) or {}
+        address = str(data.get("address", "")).strip()
+        username = str(data.get("username", "")).strip()
+        password = str(data.get("password", "")).strip()
+        try:
+            port = int(data.get("port"))
+        except (TypeError, ValueError):
+            port = 0
+
+        if not address or not (1 <= port <= 65535):
+            return jsonify({"success": False, "error": "Proxy address and a valid port are required."}), 400
+        if not password:
+            return jsonify({"success": False, "error": "Proxy password is required for a new connection test."}), 400
+
+        try:
+            test_proxy_connection(address, port, username, password)
+        except Exception as exc:
+            return jsonify({"success": False, "status": "dead", "error": str(exc)}), 502
+
+        return jsonify({"success": True, "status": "active", "message": "Proxy is live and reachable."})
+    except Exception as exc:
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+
 @app.post("/api/proxies")
 def add_proxy():
     denied = require_access()
@@ -380,6 +433,11 @@ def add_proxy():
             return jsonify({"success": False, "error": "Proxy address and a valid port are required."}), 400
         if not password:
             return jsonify({"success": False, "error": "Proxy password is required."}), 400
+
+        try:
+            test_proxy_connection(address, port, username, password)
+        except Exception as exc:
+            return jsonify({"success": False, "error": f"Proxy test failed: {exc}"}), 502
 
         db = get_supabase()
         response = db.table("proxies").insert({
@@ -419,6 +477,20 @@ def edit_proxy(proxy_id):
 
         if not address or not (1 <= port <= 65535):
             return jsonify({"success": False, "error": "Proxy address and a valid port are required."}), 400
+
+        if password:
+            test_password = password
+        else:
+            existing_rows = get_proxy_rows()
+            existing = next((item for item in existing_rows if item["id"] == proxy_id), None)
+            if not existing:
+                return jsonify({"success": False, "error": "Proxy not found."}), 404
+            test_password = decrypt_credential(existing["credential"])
+
+        try:
+            test_proxy_connection(address, port, username, test_password)
+        except Exception as exc:
+            return jsonify({"success": False, "error": f"Proxy test failed: {exc}"}), 502
 
         update = {
             "address": address,
