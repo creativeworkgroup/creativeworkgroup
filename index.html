@@ -50,6 +50,207 @@ h2 {
     color: #38bdf8;
 }
 
+.access-gate {
+    width: min(430px, 100%);
+    margin: 12vh auto 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 30px;
+    box-shadow: 0 10px 25px rgba(0,0,0,.3);
+}
+
+.access-gate h1 {
+    margin: 0 0 10px;
+    font-size: 1.45rem;
+}
+
+.access-gate p {
+    margin: 0 0 22px;
+    color: var(--muted);
+}
+
+.access-gate .gate-error {
+    color: var(--danger);
+    font-size: .88rem;
+    margin-top: 10px;
+    min-height: 20px;
+}
+
+.mail-header {
+    display:flex;
+    align-items:center;
+    gap:10px;
+    border-bottom:1px solid var(--border);
+    padding-bottom:15px;
+    margin-bottom:22px;
+}
+
+.mail-header h2 {
+    flex:1;
+    margin:0;
+    border:0;
+    padding:0;
+}
+
+.proxy-header-actions {
+    display:flex;
+    align-items:center;
+    gap:12px;
+    white-space:nowrap;
+    font-size:.82rem;
+    font-weight:700;
+}
+
+.proxy-count {
+    cursor:pointer;
+    color:var(--text);
+}
+
+.proxy-dead-count {
+    cursor:pointer;
+    color:var(--danger);
+}
+
+.proxy-add-btn {
+    width:auto !important;
+    margin:0 !important;
+    padding:0 !important;
+    background:transparent !important;
+    color:var(--text) !important;
+    font-size:1.5rem !important;
+    line-height:1 !important;
+}
+
+.proxy-add-btn:hover {
+    background:transparent !important;
+    color:#38bdf8 !important;
+}
+
+.proxy-panel {
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,.58);
+    align-items:center;
+    justify-content:center;
+    z-index:10000;
+    padding:20px;
+}
+
+.proxy-panel.open {
+    display:flex;
+}
+
+.proxy-dialog {
+    width:min(720px,100%);
+    max-height:85vh;
+    overflow:auto;
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:24px;
+}
+
+.proxy-dialog h3 {
+    margin:0;
+}
+
+.proxy-card {
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:14px;
+    margin-top:10px;
+}
+
+.proxy-card.dead {
+    border-color:rgba(239,68,68,.55);
+}
+
+.proxy-card-top {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+}
+
+.proxy-address {
+    font-weight:700;
+}
+
+.proxy-status-live {
+    color:var(--success);
+    font-size:.78rem;
+    font-weight:700;
+}
+
+.proxy-status-dead {
+    color:var(--danger);
+    font-size:.78rem;
+    font-weight:700;
+}
+
+.proxy-meta {
+    color:var(--muted);
+    font-size:.82rem;
+    margin-top:6px;
+}
+
+.proxy-error {
+    color:var(--danger);
+    font-size:.78rem;
+    margin-top:6px;
+    word-break:break-word;
+}
+
+.proxy-actions {
+    display:flex;
+    justify-content:flex-end;
+    gap:8px;
+    margin-top:12px;
+}
+
+.proxy-actions button {
+    width:auto;
+    margin:0;
+    padding:8px 12px;
+    font-size:.82rem;
+}
+
+.proxy-secondary {
+    background:var(--border);
+}
+
+.proxy-danger {
+    background:var(--danger);
+}
+
+.proxy-form-grid {
+    display:grid;
+    grid-template-columns:2fr 1fr;
+    gap:12px;
+}
+
+.proxy-form-full {
+    grid-column:1 / -1;
+}
+
+@media (max-width:600px) {
+    .container {
+        padding:20px;
+    }
+    .proxy-header-actions {
+        gap:7px;
+        font-size:.75rem;
+    }
+    .mail-header {
+        align-items:flex-start;
+    }
+    .proxy-form-grid {
+        grid-template-columns:1fr;
+    }
+}
+
 .form-group {
     margin-bottom: 20px;
 }
@@ -253,9 +454,31 @@ button:disabled {
 
 <body>
 
-<div class="container">
+<div class="access-gate" id="accessGate">
+    <h1>Access restricted</h1>
+    <p>Enter your access code to continue.</p>
+    <label for="accessCodeInput">Access code</label>
+    <input
+        id="accessCodeInput"
+        type="password"
+        autocomplete="off"
+        placeholder="Access code"
+        onkeydown="if(event.key === 'Enter') unlockMailConsole()"
+    >
+    <button type="button" id="unlockBtn" onclick="unlockMailConsole()">Unlock</button>
+    <div class="gate-error" id="gateError"></div>
+</div>
 
-    <h2>Creative Workgroup Mail</h2>
+<div class="container" id="mailConsole" style="display:none;">
+
+    <div class="mail-header">
+        <h2>Creative Workgroup Mail</h2>
+        <div class="proxy-header-actions">
+            <span class="proxy-count" id="proxyCount" onclick="openProxyManager('active')">0 Proxies</span>
+            <span class="proxy-dead-count" id="proxyDeadCount" style="display:none;" onclick="openProxyManager('dead')">0 dead</span>
+            <button type="button" class="proxy-add-btn" title="Add proxy" aria-label="Add proxy" onclick="openProxyModal()">＋</button>
+        </div>
+    </div>
 
     <div class="form-group">
         <label>Send From</label>
@@ -270,6 +493,45 @@ button:disabled {
         >
             ＋ ADD SENDER
         </button>
+    </div>
+
+    <div class="proxy-panel" id="proxyManagerModal" onclick="if(event.target===this) closeProxyManager()">
+        <div class="proxy-dialog">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+                <h3 id="proxyManagerTitle">Live Proxies</h3>
+                <button type="button" class="proxy-add-btn" onclick="closeProxyManager()">×</button>
+            </div>
+            <div id="proxyList"></div>
+        </div>
+    </div>
+
+    <div class="proxy-panel" id="proxyEditModal" onclick="if(event.target===this) closeProxyModal()">
+        <div class="proxy-dialog" style="max-width:520px;">
+            <h3 id="proxyEditTitle">Add Proxy</h3>
+            <div class="proxy-form-grid" style="margin-top:18px;">
+                <div>
+                    <label>Proxy Address</label>
+                    <input id="proxyAddressInput" type="text" placeholder="31.59.20.176">
+                </div>
+                <div>
+                    <label>Port</label>
+                    <input id="proxyPortInput" type="number" min="1" max="65535" placeholder="6754">
+                </div>
+                <div class="proxy-form-full">
+                    <label>Username</label>
+                    <input id="proxyUsernameInput" type="text" autocomplete="off" placeholder="Proxy username">
+                </div>
+                <div class="proxy-form-full">
+                    <label>Password</label>
+                    <input id="proxyPasswordInput" type="password" autocomplete="new-password" placeholder="Proxy password">
+                </div>
+            </div>
+            <div id="proxyEditHint" class="proxy-meta"></div>
+            <div class="proxy-actions">
+                <button type="button" class="proxy-secondary" onclick="closeProxyModal()">CANCEL</button>
+                <button type="button" id="saveProxyBtn" onclick="saveProxy()">SAVE PROXY</button>
+            </div>
+        </div>
     </div>
 
     <div
@@ -435,6 +697,275 @@ customer3@gmail.com"></textarea>
 
 <script>
 const variantContainer = document.getElementById("variants");
+
+let proxyPool = [];
+let editingProxyId = null;
+let proxyManagerMode = "active";
+
+function showMailConsole() {
+    document.getElementById("accessGate").style.display = "none";
+    document.getElementById("mailConsole").style.display = "block";
+    loadSenders();
+    loadProxies();
+}
+
+async function unlockMailConsole() {
+    const input = document.getElementById("accessCodeInput");
+    const button = document.getElementById("unlockBtn");
+    const errorEl = document.getElementById("gateError");
+    const accessCode = input.value.trim();
+
+    errorEl.textContent = "";
+
+    if (!accessCode) {
+        errorEl.textContent = "Enter your access code.";
+        return;
+    }
+
+    button.disabled = true;
+    button.textContent = "Unlocking...";
+
+    try {
+        const response = await fetch("/api/auth/unlock", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({access_code: accessCode})
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Access denied.");
+        }
+
+        input.value = "";
+        showMailConsole();
+    } catch (error) {
+        errorEl.textContent = error.message || "Access denied.";
+    } finally {
+        button.disabled = false;
+        button.textContent = "Unlock";
+    }
+}
+
+async function loadProxies() {
+    try {
+        const response = await fetch("/api/proxies", {
+            headers: {"Accept": "application/json"},
+            cache: "no-store"
+        });
+
+        if (response.status === 401) return;
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Unable to load proxies.");
+        }
+
+        proxyPool = Array.isArray(data.proxies) ? data.proxies : [];
+        renderProxyCounts();
+    } catch (error) {
+        console.error("Unable to load proxy pool:", error);
+    }
+}
+
+function renderProxyCounts() {
+    const live = proxyPool.filter(proxy => proxy.status === "active").length;
+    const dead = proxyPool.filter(proxy => proxy.status === "dead").length;
+
+    document.getElementById("proxyCount").textContent =
+        `${live} ${live === 1 ? "Proxy" : "Proxies"}`;
+
+    const deadEl = document.getElementById("proxyDeadCount");
+    deadEl.textContent = `${dead} dead`;
+    deadEl.style.display = dead ? "inline" : "none";
+}
+
+function openProxyManager(mode = "active") {
+    proxyManagerMode = mode;
+    renderProxyManager();
+    document.getElementById("proxyManagerModal").classList.add("open");
+}
+
+function closeProxyManager() {
+    document.getElementById("proxyManagerModal").classList.remove("open");
+}
+
+function renderProxyManager() {
+    const list = document.getElementById("proxyList");
+    const title = document.getElementById("proxyManagerTitle");
+    const proxies = proxyPool.filter(proxy =>
+        proxyManagerMode === "dead"
+            ? proxy.status === "dead"
+            : proxy.status === "active"
+    );
+
+    title.textContent = proxyManagerMode === "dead"
+        ? `Dead Proxies (${proxies.length})`
+        : `Live Proxies (${proxies.length})`;
+
+    if (!proxies.length) {
+        list.innerHTML = `<div class="proxy-meta" style="padding:20px 0;">No ${proxyManagerMode === "dead" ? "dead" : "live"} proxies.</div>`;
+        return;
+    }
+
+    list.innerHTML = proxies.map(proxy => {
+        const statusClass = proxy.status === "dead"
+            ? "proxy-status-dead"
+            : "proxy-status-live";
+
+        const error = proxy.last_error
+            ? `<div class="proxy-error">${escapeHtml(proxy.last_error)}</div>`
+            : "";
+
+        const checked = proxy.last_checked_at
+            ? `Last checked: ${escapeHtml(new Date(proxy.last_checked_at).toLocaleString())}`
+            : "Not tested yet";
+
+        return `
+            <div class="proxy-card ${proxy.status === "dead" ? "dead" : ""}">
+                <div class="proxy-card-top">
+                    <span class="proxy-address">
+                        ${escapeHtml(proxy.address)}:${escapeHtml(proxy.port)}
+                    </span>
+                    <span class="${statusClass}">
+                        ● ${proxy.status === "dead" ? "DEAD" : "LIVE"}
+                    </span>
+                </div>
+                <div class="proxy-meta">
+                    Username: ${escapeHtml(proxy.username || "—")}
+                </div>
+                <div class="proxy-meta">${checked}</div>
+                ${error}
+                <div class="proxy-actions">
+                    ${proxy.status === "dead"
+                        ? `<button type="button" class="proxy-secondary" onclick="testProxy('${proxy.id}')">TEST AGAIN</button>`
+                        : ""}
+                    <button type="button" class="proxy-secondary" onclick="openProxyModal('${proxy.id}')">EDIT</button>
+                    <button type="button" class="proxy-danger" onclick="deleteProxy('${proxy.id}')">DELETE</button>
+                </div>
+            </div>
+        `;
+    }).join("");
+}
+
+function openProxyModal(proxyId = null) {
+    editingProxyId = proxyId;
+    const proxy = proxyId ? proxyPool.find(item => item.id === proxyId) : null;
+
+    document.getElementById("proxyEditTitle").textContent =
+        proxy ? "Edit Proxy" : "Add Proxy";
+    document.getElementById("proxyAddressInput").value = proxy?.address || "";
+    document.getElementById("proxyPortInput").value = proxy?.port || "";
+    document.getElementById("proxyUsernameInput").value = proxy?.username || "";
+    document.getElementById("proxyPasswordInput").value = "";
+    document.getElementById("proxyEditHint").textContent =
+        proxy
+            ? "Leave password blank to keep the existing password."
+            : "Proxy credentials are stored securely on the server.";
+
+    document.getElementById("proxyEditModal").classList.add("open");
+}
+
+function closeProxyModal() {
+    document.getElementById("proxyEditModal").classList.remove("open");
+    editingProxyId = null;
+}
+
+async function saveProxy() {
+    const address = document.getElementById("proxyAddressInput").value.trim();
+    const port = document.getElementById("proxyPortInput").value.trim();
+    const username = document.getElementById("proxyUsernameInput").value.trim();
+    const password = document.getElementById("proxyPasswordInput").value;
+
+    if (!address || !port) {
+        alert("Proxy address and port are required.");
+        return;
+    }
+
+    if (!editingProxyId && !password) {
+        alert("Proxy password is required.");
+        return;
+    }
+
+    const button = document.getElementById("saveProxyBtn");
+    button.disabled = true;
+    button.textContent = "SAVING...";
+
+    try {
+        const url = editingProxyId
+            ? `/api/proxies/${encodeURIComponent(editingProxyId)}`
+            : "/api/proxies";
+
+        const response = await fetch(url, {
+            method: editingProxyId ? "PATCH" : "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({address, port, username, password})
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Unable to save proxy.");
+        }
+
+        closeProxyModal();
+        await loadProxies();
+
+        if (document.getElementById("proxyManagerModal").classList.contains("open")) {
+            renderProxyManager();
+        }
+    } catch (error) {
+        alert(error.message || "Unable to save proxy.");
+    } finally {
+        button.disabled = false;
+        button.textContent = "SAVE PROXY";
+    }
+}
+
+async function deleteProxy(proxyId) {
+    const proxy = proxyPool.find(item => item.id === proxyId);
+    if (!proxy) return;
+
+    if (!confirm(`Delete ${proxy.address}:${proxy.port}?`)) return;
+
+    try {
+        const response = await fetch(
+            `/api/proxies/${encodeURIComponent(proxyId)}`,
+            {method: "DELETE"}
+        );
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Unable to delete proxy.");
+        }
+
+        proxyPool = proxyPool.filter(item => item.id !== proxyId);
+        renderProxyCounts();
+        renderProxyManager();
+    } catch (error) {
+        alert(error.message || "Unable to delete proxy.");
+    }
+}
+
+async function testProxy(proxyId) {
+    try {
+        const response = await fetch(
+            `/api/proxies/${encodeURIComponent(proxyId)}/test`,
+            {method: "POST"}
+        );
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Proxy test failed.");
+        }
+
+        await loadProxies();
+        renderProxyManager();
+    } catch (error) {
+        await loadProxies();
+        renderProxyManager();
+        alert(error.message || "Proxy test failed.");
+    }
+}
 
 const defaultVariants = [
     {
@@ -1327,8 +1858,6 @@ function markSenderDead(senderId) {
     saveSenders();
     renderSenders();
 }
-
-loadSenders();
 
 async function startSending() {
     if (mailQueue && !queueStopped) {
