@@ -1229,7 +1229,9 @@ function renderResults(results) {
 
         const variant = document.createElement("span");
         variant.className = "variant-result";
-        variant.textContent = `V${result.variant}`;
+        variant.textContent = result.variant === "—"
+            ? "—"
+            : `V${result.variant}/Proxy${result.proxy_number ?? "—"}`;
 
         const status = document.createElement("span");
         status.className =
@@ -1380,7 +1382,7 @@ function addQueueResult(result) {
         variant.textContent =
             result.variant === "—"
                 ? "—"
-                : `V${result.variant}`;
+                : `V${result.variant}/Proxy${result.proxy_number ?? "—"}`;
 
         const status = document.createElement("span");
         status.className =
@@ -1511,7 +1513,11 @@ async function processQueue() {
                             ),
                         sender: data.sender,
                         provider: data.provider,
-                        sender_failed: true
+                        sender_failed: true,
+                        proxy_number:
+                            data.results && data.results.length
+                                ? data.results[0].proxy_number
+                                : null
                     });
 
                     mailQueue.index++;

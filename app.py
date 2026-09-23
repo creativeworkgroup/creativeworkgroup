@@ -70,6 +70,11 @@ def choose_proxy():
     if not active:
         return None
 
+    # Stable human-facing proxy number based on creation order.
+    # This is only a display label; credentials remain server-side.
+    for index, row in enumerate(rows, start=1):
+        row["_proxy_number"] = index
+
     active.sort(key=lambda row: row.get("last_used_at") or "")
     selected = active[0]
 
@@ -854,6 +859,7 @@ def send_email():
                         "sender_id": sender_id,
                         "sender": sender_address,
                         "provider": provider,
+                        "proxy_number": proxy_row.get("_proxy_number"),
                     })
 
                 else:
@@ -888,6 +894,7 @@ def send_email():
                         "sender": sender_address,
                         "provider": provider,
                         "sender_failed": sender_failed,
+                        "proxy_number": proxy_row.get("_proxy_number"),
                     })
 
                     if sender_failed:
@@ -930,6 +937,7 @@ def send_email():
                     "sender_failed": False,
                     "proxy_failed": True,
                     "proxy_id": proxy_row["id"],
+                    "proxy_number": proxy_row.get("_proxy_number"),
                 })
 
                 return jsonify({
@@ -958,6 +966,7 @@ def send_email():
                     "sender": sender_address,
                     "provider": provider,
                     "sender_failed": False,
+                    "proxy_number": proxy_row.get("_proxy_number"),
                 })
 
         return jsonify({
