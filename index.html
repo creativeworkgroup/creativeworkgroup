@@ -449,6 +449,43 @@ button:disabled {
     padding:6px 8px !important;
 }
 
+.sender-actions {
+    display:flex;
+    align-items:center;
+    gap:2px;
+    flex-shrink:0;
+}
+
+.sender-toggle {
+    width:auto !important;
+    border:0;
+    background:transparent;
+    cursor:pointer;
+    font-size:18px;
+    padding:6px 8px !important;
+    margin:0 !important;
+}
+
+.sender-toggle:hover {
+    background:transparent;
+}
+
+.sender-toggle.pause {
+    color:var(--muted);
+}
+
+.sender-toggle.play {
+    color:var(--success);
+}
+
+.sender-dead {
+    color:var(--danger) !important;
+}
+
+.sender-paused {
+    color:#f59e0b;
+}
+
 </style>
 </head>
 
@@ -1229,9 +1266,8 @@ function renderResults(results) {
 
         const variant = document.createElement("span");
         variant.className = "variant-result";
-        variant.textContent = result.variant === "—"
-            ? "—"
-            : `V${result.variant}/Proxy${result.proxy_number ?? "—"}`;
+        const proxyLabel = result.proxy_number ? `/Proxy${result.proxy_number}` : "";
+        variant.textContent = `V${result.variant}${proxyLabel}`;
 
         const status = document.createElement("span");
         status.className =
@@ -1379,10 +1415,11 @@ function addQueueResult(result) {
 
         const variant = document.createElement("span");
         variant.className = "variant-result";
+        const proxyLabel = result.proxy_number ? `/Proxy${result.proxy_number}` : "";
         variant.textContent =
             result.variant === "—"
                 ? "—"
-                : `V${result.variant}/Proxy${result.proxy_number ?? "—"}`;
+                : `V${result.variant}${proxyLabel}`;
 
         const status = document.createElement("span");
         status.className =
@@ -1513,11 +1550,7 @@ async function processQueue() {
                             ),
                         sender: data.sender,
                         provider: data.provider,
-                        sender_failed: true,
-                        proxy_number:
-                            data.results && data.results.length
-                                ? data.results[0].proxy_number
-                                : null
+                        sender_failed: true
                     });
 
                     mailQueue.index++;
@@ -1656,8 +1689,22 @@ function renderSenders() {
 
     senderPool.forEach((sender, index) => {
         const row = document.createElement("div");
+        const status = sender.status || "active";
+        const isDead = status === "dead";
+        const isPaused = status === "paused";
+        const isActive = status === "active";
 
         row.className = "sender-row";
+
+        const statusHtml = isDead
+            ? '<span class="sender-dead">✕ DEAD</span>'
+            : isPaused
+                ? '<span class="sender-paused">Ⅱ PAUSED</span>'
+                : '<span class="sender-active">● ACTIVE</span>';
+
+        const toggleIcon = isActive ? "Ⅱ" : "▶";
+        const toggleClass = isActive ? "pause" : "play";
+        const toggleTitle = isActive ? "Pause sender" : "Resume sender";
 
         row.innerHTML = `
             <div class="sender-identity">
@@ -1669,34 +1716,34 @@ function renderSenders() {
                     )}
                 </div>
 
-                <div class="sender-status ${
-                    sender.status === "dead"
-                        ? "sender-dead"
-                        : "sender-active"
-                }">
-                    ${
-                        sender.status === "dead"
-                            ? "● DEAD"
-                            : "● ACTIVE"
-                    }
-                </div>
+                <div class="sender-status">${statusHtml}</div>
             </div>
 
-            <button
-                type="button"
-                class="sender-delete"
-                title="Delete sender"
-                aria-label="Delete sender"
-                onclick="deleteSender(${index})"
-            >
-                🗑
-            </button>
+            <div class="sender-actions">
+                <button
+                    type="button"
+                    class="sender-toggle ${toggleClass}"
+                    title="${toggleTitle}"
+                    aria-label="${toggleTitle}"
+                    onclick="toggleSender(${index})"
+                >
+                    ${toggleIcon}
+                </button>
+
+                <button
+                    type="button"
+                    class="sender-delete"
+                    title="Delete sender"
+                    aria-label="Delete sender"
+                    onclick="deleteSender(${index})"
+                >
+                    🗑
+                </button>
+            </div>
         `;
 
         container.appendChild(row);
     });
-
-    saveSenders();
 }
 
 function openSenderModal() {
@@ -1839,6 +1886,36 @@ async function saveSender() {
     }
 }
 
+async function toggleSender(index) {
+    const sender = senderPool[index];
+    if (!sender) return;
+
+    const nextStatus = sender.status === "active" ? "paused" : "active";
+
+    try {
+        const response = await fetch(
+            `/api/senders/${encodeURIComponent(sender.id)}/status`,
+            {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: nextStatus })
+            }
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+            throw new Error(data.error || "Unable to update sender status.");
+        }
+
+        senderPool[index] = data.sender;
+        renderSenders();
+
+    } catch (error) {
+        alert(error.message || "Unable to update sender status.");
+    }
+}
+
 async function deleteSender(index) {
     const sender = senderPool[index];
 
@@ -1884,7 +1961,7 @@ async function deleteSender(index) {
 
 function getSenders() {
     return senderPool.filter(sender =>
-        sender.status !== "dead" &&
+        sender.status === "active" &&
         sender.email &&
         sender.email.includes("@")
     );

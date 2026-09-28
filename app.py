@@ -348,6 +348,48 @@ def remove_sender(sender_id):
         }), 500
 
 
+@app.patch("/api/senders/<sender_id>/status")
+def update_sender_status(sender_id):
+    denied = require_access()
+    if denied:
+        return denied
+
+    try:
+        data = request.get_json(silent=True) or {}
+        status = str(data.get("status", "")).strip().lower()
+
+        if status not in ("active", "paused"):
+            return jsonify({
+                "success": False,
+                "error": "Sender status must be active or paused."
+            }), 400
+
+        db = get_supabase()
+        response = (
+            db.table("senders")
+            .update({"status": status})
+            .eq("id", sender_id)
+            .execute()
+        )
+
+        if not response.data:
+            return jsonify({
+                "success": False,
+                "error": "Sender was not found."
+            }), 404
+
+        return jsonify({
+            "success": True,
+            "sender": public_sender(response.data[0])
+        })
+
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc)
+        }), 500
+
+
 @app.get("/api/proxies")
 def get_proxies():
     denied = require_access()
@@ -649,9 +691,10 @@ def send_email():
                 "error": "Sender was not found."
             }), 404
 
-        if stored_sender.get("status") == "dead":
+        if stored_sender.get("status") != "active":
+            status_label = str(stored_sender.get("status") or "inactive").upper()
             return jsonify({
-                "error": "This sender is marked DEAD and cannot be used.",
+                "error": f"This sender is marked {status_label} and cannot be used.",
                 "sender_failed": True,
                 "sender_id": sender_id
             }), 409
@@ -878,11 +921,27 @@ def send_email():
                     if not error_data:
                         error_data = response.text
 
-                    # A provider/authentication/configuration
-                    # failure can invalidate the sender.
+                    # Authentication/configuration failures and provider
+                    # throttling make this sender unavailable for the
+                    # remainder of the current queue. Mark it DEAD so the
+                    # frontend automatically skips it while other senders
+                    # continue. This does not attempt to bypass provider
+                    # limits; it simply removes the failed sender from the
+                    # active pool.
+                    throttle_error = False
+                    if provider == "cloudflare":
+                        cloudflare_errors = response_data.get("errors") or []
+                        throttle_error = any(
+                            str(item.get("code")) == "10004"
+                            for item in cloudflare_errors
+                            if isinstance(item, dict)
+                        )
+                    elif provider == "resend":
+                        throttle_error = response.status_code == 429
+
                     sender_failed = (
-                        response.status_code
-                        in (401, 403, 422)
+                        response.status_code in (401, 403, 422, 429)
+                        or throttle_error
                     )
 
                     results.append({
