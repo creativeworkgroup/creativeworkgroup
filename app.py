@@ -631,6 +631,28 @@ def test_proxy(proxy_id):
 
 
 def render_email_content(body, buttons):
+    # Self-contained CTA markers — no separate button metadata required.
+    def replace_self_contained(match):
+        import urllib.parse
+        label = urllib.parse.unquote(match.group(1))
+        url = urllib.parse.unquote(match.group(2))
+        safe_label = html.escape(label)
+        safe_url = html.escape(url, quote=True)
+        return (
+            '<div style="text-align:center;margin:18px 0;">'
+            '<a href="' + safe_url + '" '
+            'style="display:inline-block;padding:12px 24px;'
+            'background:#3b82f6;color:#ffffff;text-decoration:none;'
+            'border-radius:10px;font-weight:700;">'
+            + safe_label +
+            '</a></div>'
+        )
+
+    self_contained = re.compile(
+        r'\[\[CTA_BUTTON:([^|]+)\|([^\]]+)\]\]'
+    )
+    body = self_contained.sub(replace_self_contained, body)
+
     """
     Converts the plain-text composer body plus CTA markers into:
       - safe HTML for HTML-capable email clients
@@ -732,6 +754,428 @@ def render_email_content(body, buttons):
 
 
 @app.post("/api/send")
+def send_email():
+    denied = require_access()
+    if denied:
+        return denied
+
+    try:
+        data = request.get_json(force=True)
+
+        sender = data.get("sender") or {}
+        recipients = data.get("to", [])
+        variants = data.get("variants", [])
+
+        if isinstance(recipients, str):
+            recipients = [
+                x.strip()
+                for x in recipients.splitlines()
+                if x.strip()
+            ]
+
+        if not isinstance(sender, dict):
+            return jsonify({
+                "error": "A valid sender is required."
+            }), 400
+
+        cleaned_variants = []
+
+        for variant in variants:
+            if not isinstance(variant, dict):
+                continue
+
+            subject = str(variant.get("subject", "")).strip()
+            body = str(variant.get("body", "")).strip()
+
+            if subject and body:
+                buttons = variant.get("buttons", [])
+
+                if not isinstance(buttons, list):
+                    buttons = []
+
+                cleaned_variants.append({
+                    "subject": subject,
+                    "body": body,
+                    "buttons": buttons
+                })
+
+        if not cleaned_variants:
+            return jsonify({
+                "error": "At least one complete subject/body variant is required."
+            }), 400
+
+        sender_id = str(sender.get("id", "")).strip()
+
+        if not sender_id:
+            return jsonify({
+                "error": "Sender ID is required."
+            }), 400
+
+        # Sender identity and credentials are resolved exclusively
+        # from the server-side Supabase store. Never trust the
+        # provider, email, name, or credential supplied by the browser.
+        sender_store = get_sender_store()
+        stored_sender = sender_store.get(sender_id)
+
+        if not stored_sender:
+            return jsonify({
+                "error": "Sender was not found."
+            }), 404
+
+        if stored_sender.get("status") != "active":
+            status_label = str(stored_sender.get("status") or "inactive").upper()
+            return jsonify({
+                "error": f"This sender is marked {status_label} and cannot be used.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 409
+
+        sender_name = str(
+            stored_sender.get("name", "")
+        ).strip()
+
+        sender_address = str(
+            stored_sender.get("email", "")
+        ).strip()
+
+        provider = str(
+            stored_sender.get("provider", "")
+        ).strip().lower()
+
+        sender_credential = stored_sender.get("credential")
+        sender_account_id = stored_sender.get("account_id")
+
+        if not sender_address:
+            return jsonify({
+                "error": "Sender email address is not configured.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
+
+        if not re.match(
+            r"^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$",
+            sender_address
+        ):
+            return jsonify({
+                "error": "Invalid sender email address.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
+
+        if provider not in ("cloudflare", "resend"):
+            return jsonify({
+                "error": "Unsupported sender provider.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
+
+        if not sender_credential:
+            return jsonify({
+                "error": "Sender credential is not configured.",
+                "sender_failed": True,
+                "sender_id": sender_id
+            }), 500
+
+        proxy_row = choose_proxy()
+        if not proxy_row:
+            return jsonify({
+                "error": "No active proxies are available.",
+                "proxy_failed": True
+            }), 503
+
+        proxy_url = build_proxy_url(proxy_row)
+        request_proxies = {"http": proxy_url, "https": proxy_url}
+
+        if provider == "cloudflare":
+            if not sender_account_id:
+                return jsonify({
+                    "error": "Cloudflare account ID is not configured.",
+                    "sender_failed": True,
+                    "sender_id": sender_id
+                }), 500
+
+            api_url = (
+                "https://api.cloudflare.com/client/v4/accounts/"
+                f"{sender_account_id}/email/sending/send"
+            )
+
+            headers = {
+                "Authorization": f"Bearer {sender_credential}",
+                "Content-Type": "application/json",
+            }
+
+        else:
+            api_url = "https://api.resend.com/emails"
+
+            headers = {
+                "Authorization": f"Bearer {sender_credential}",
+                "Content-Type": "application/json",
+            }
+
+        results = []
+        sent = 0
+        failed = 0
+
+        import random
+
+        shuffled_variants = []
+
+        while len(shuffled_variants) < len(recipients):
+            batch = list(
+                range(len(cleaned_variants))
+            )
+            random.shuffle(batch)
+            shuffled_variants.extend(batch)
+
+        for index, recipient in enumerate(recipients):
+            variant_index = shuffled_variants[index]
+            variant = cleaned_variants[variant_index]
+
+            if provider == "cloudflare":
+                email_html, email_text = render_email_content(
+                    variant["body"],
+                    variant.get("buttons", [])
+                )
+
+                payload = {
+                    "from": {
+                        "address": sender_address,
+                        "name": sender_name
+                    },
+                    "to": [recipient],
+                    "subject": variant["subject"],
+                    "text": email_text,
+                    "html": email_html,
+                }
+
+            else:
+                from_value = (
+                    f"{sender_name} "
+                    f"<{sender_address}>"
+                    if sender_name
+                    else sender_address
+                )
+
+                email_html, email_text = render_email_content(
+                    variant["body"],
+                    variant.get("buttons", [])
+                )
+
+                payload = {
+                    "from": from_value,
+                    "to": [recipient],
+                    "subject": variant["subject"],
+                    "text": email_text,
+                    "html": email_html,
+                }
+
+            try:
+                response = requests.post(
+                    api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                    proxies=request_proxies,
+                )
+
+                try:
+                    response_data = response.json()
+                except Exception:
+                    response_data = {}
+
+                if provider == "cloudflare":
+                    provider_success = (
+                        response.ok
+                        and response_data.get("success") is True
+                    )
+                else:
+                    provider_success = (
+                        response.ok
+                        and bool(
+                            response_data.get("id")
+                        )
+                    )
+
+                if provider_success:
+                    sent += 1
+
+                    if provider == "cloudflare":
+                        result_data = (
+                            response_data.get(
+                                "result",
+                                {}
+                            )
+                        )
+
+                        message_id = (
+                            result_data.get(
+                                "message_id"
+                            )
+                        )
+                    else:
+                        message_id = (
+                            response_data.get("id")
+                        )
+
+                    results.append({
+                        "email": recipient,
+                        "status": "Sent",
+                        "variant": variant_index + 1,
+                        "message_id": message_id,
+                        "sender_id": sender_id,
+                        "sender": sender_address,
+                        "provider": provider,
+                        "proxy_number": proxy_row.get("_proxy_number"),
+                    })
+
+                else:
+                    failed += 1
+
+                    error_data = (
+                        response_data.get(
+                            "errors"
+                        )
+                        if provider == "cloudflare"
+                        else response_data.get(
+                            "message"
+                        )
+                    )
+
+                    if not error_data:
+                        error_data = response.text
+
+                    # Authentication/configuration failures and provider
+                    # throttling make this sender unavailable for the
+                    # remainder of the current queue. Mark it DEAD so the
+                    # frontend automatically skips it while other senders
+                    # continue. This does not attempt to bypass provider
+                    # limits; it simply removes the failed sender from the
+                    # active pool.
+                    throttle_error = False
+                    if provider == "cloudflare":
+                        cloudflare_errors = response_data.get("errors") or []
+                        throttle_error = any(
+                            str(item.get("code")) == "10004"
+                            for item in cloudflare_errors
+                            if isinstance(item, dict)
+                        )
+                    elif provider == "resend":
+                        throttle_error = response.status_code == 429
+
+                    sender_failed = (
+                        response.status_code in (401, 403, 422, 429)
+                        or throttle_error
+                    )
+
+                    results.append({
+                        "email": recipient,
+                        "status": "Failed",
+                        "variant": variant_index + 1,
+                        "error": error_data,
+                        "sender_id": sender_id,
+                        "sender": sender_address,
+                        "provider": provider,
+                        "sender_failed": sender_failed,
+                        "proxy_number": proxy_row.get("_proxy_number"),
+                    })
+
+                    if sender_failed:
+                        mark_sender_dead(sender_id)
+
+                        return jsonify({
+                            "success": False,
+                            "results": results,
+                            "sent": sent,
+                            "failed": failed,
+                            "total": len(recipients),
+                            "sender_failed": True,
+                            "sender_id": sender_id,
+                            "sender": sender_address,
+                            "provider": provider,
+                        }), 502
+
+            except requests.RequestException as exc:
+                failed += 1
+                proxy_error = str(exc)
+
+                try:
+                    from datetime import datetime, timezone
+                    get_supabase().table("proxies").update({
+                        "status": "dead",
+                        "last_checked_at": datetime.now(timezone.utc).isoformat(),
+                        "last_error": proxy_error,
+                    }).eq("id", proxy_row["id"]).execute()
+                except Exception:
+                    pass
+
+                results.append({
+                    "email": recipient,
+                    "status": "Failed",
+                    "variant": variant_index + 1,
+                    "error": proxy_error,
+                    "sender_id": sender_id,
+                    "sender": sender_address,
+                    "provider": provider,
+                    "sender_failed": False,
+                    "proxy_failed": True,
+                    "proxy_id": proxy_row["id"],
+                    "proxy_number": proxy_row.get("_proxy_number"),
+                })
+
+                return jsonify({
+                    "success": False,
+                    "results": results,
+                    "sent": sent,
+                    "failed": failed,
+                    "total": len(recipients),
+                    "sender_failed": False,
+                    "proxy_failed": True,
+                    "proxy_id": proxy_row["id"],
+                    "sender_id": sender_id,
+                    "sender": sender_address,
+                    "provider": provider,
+                }), 502
+
+            except Exception as exc:
+                failed += 1
+
+                results.append({
+                    "email": recipient,
+                    "status": "Failed",
+                    "variant": variant_index + 1,
+                    "error": str(exc),
+                    "sender_id": sender_id,
+                    "sender": sender_address,
+                    "provider": provider,
+                    "sender_failed": False,
+                    "proxy_number": proxy_row.get("_proxy_number"),
+                })
+
+        return jsonify({
+            "success": failed == 0,
+            "results": results,
+            "sent": sent,
+            "failed": failed,
+            "total": len(recipients),
+            "sender_failed": False,
+            "sender_id": sender_id,
+            "sender": sender_address,
+            "provider": provider,
+        })
+
+    except Exception as exc:
+        return jsonify({
+            "success": False,
+            "error": str(exc),
+        }), 500
+
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000))
+    )
+
 def send_email():
     denied = require_access()
     if denied:
