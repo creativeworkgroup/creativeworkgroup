@@ -486,6 +486,35 @@ button:disabled {
     color:#f59e0b;
 }
 
+
+.email-button-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.email-button-add {
+    width: auto !important;
+    padding: 8px 12px !important;
+    border: 1px solid #d1d5db !important;
+    background: #fff !important;
+    color: #111827 !important;
+    border-radius: 7px !important;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.email-button-add:hover {
+    background: #f3f4f6 !important;
+}
+
+.email-button-help {
+    font-size: 12px;
+    color: #6b7280;
+}
+
 </style>
 </head>
 
@@ -1171,6 +1200,16 @@ defaultVariants.forEach((item, index) => {
         <div class="form-group" style="margin-bottom:0;">
             <label>Email Body</label>
             <textarea id="body${i}"></textarea>
+            <div class="email-button-toolbar">
+                <button
+                    type="button"
+                    class="email-button-add"
+                    onclick="addEmailButton(document.getElementById('body${i}'))"
+                >+ ADD BUTTON</button>
+                <span class="email-button-help">
+                    Place your cursor where the button should appear.
+                </span>
+            </div>
         </div>
     `;
 
@@ -1211,6 +1250,16 @@ function addVariant() {
             class="variant-body"
             placeholder="Email body"
         ></textarea>
+        <div class="email-button-toolbar">
+            <button
+                type="button"
+                class="email-button-add"
+                onclick="addEmailButton(this.closest('.variant-card').querySelector('.variant-body'))"
+            >+ ADD BUTTON</button>
+            <span class="email-button-help">
+                Place your cursor where the button should appear.
+            </span>
+        </div>
     `;
 
     container.appendChild(card);
@@ -1226,26 +1275,143 @@ function renumberVariants() {
     });
 }
 
+
+function ensureEmailButtonStore(textarea) {
+    if (!textarea._emailButtons) {
+        textarea._emailButtons = [];
+    }
+
+    return textarea._emailButtons;
+}
+
+function addEmailButton(textarea) {
+    if (!textarea) return;
+
+    const buttonText = window.prompt(
+        "Button text:",
+        "View Details"
+    );
+
+    if (buttonText === null) return;
+
+    const cleanText = buttonText.trim();
+
+    if (!cleanText) {
+        alert("Button text is required.");
+        return;
+    }
+
+    const url = window.prompt(
+        "Destination URL:",
+        "https://"
+    );
+
+    if (url === null) return;
+
+    const cleanUrl = url.trim();
+
+    if (!/^https?:\/\/[^\s]+$/i.test(cleanUrl)) {
+        alert("Please enter a valid http:// or https:// URL.");
+        return;
+    }
+
+    const id =
+        "cta_" +
+        Date.now().toString(36) +
+        "_" +
+        Math.random().toString(36).slice(2, 8);
+
+    const buttons = ensureEmailButtonStore(textarea);
+
+    buttons.push({
+        id,
+        text: cleanText,
+        url: cleanUrl
+    });
+
+    const marker = `[[CTA:${id}]]`;
+
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+
+    const before = textarea.value.slice(0, start);
+    const after = textarea.value.slice(end);
+
+    const prefix =
+        before && !before.endsWith("\n")
+            ? "\n\n"
+            : "";
+
+    const suffix =
+        after && !after.startsWith("\n")
+            ? "\n\n"
+            : "";
+
+    textarea.value =
+        before +
+        prefix +
+        marker +
+        suffix +
+        after;
+
+    const cursor =
+        before.length +
+        prefix.length +
+        marker.length +
+        suffix.length;
+
+    textarea.focus();
+    textarea.setSelectionRange(cursor, cursor);
+}
+
+function getEmailButtons(textarea) {
+    return Array.isArray(textarea?._emailButtons)
+        ? textarea._emailButtons
+        : [];
+}
+
 function getVariants() {
     const variants = [];
 
+    // Existing/default variants
     for (let i = 1; i <= 5; i++) {
-        const subject = document
-            .getElementById(`subject${i}`)
-            .value
-            .trim();
+        const subjectEl = document.getElementById(`subject${i}`);
+        const bodyEl = document.getElementById(`body${i}`);
 
-        const body = document
-            .getElementById(`body${i}`)
-            .value;
+        if (!subjectEl || !bodyEl) continue;
+
+        const subject = subjectEl.value.trim();
+        const body = bodyEl.value;
 
         if (subject || body.trim()) {
             variants.push({
                 subject,
-                body
+                body,
+                buttons: getEmailButtons(bodyEl)
             });
         }
     }
+
+    // Dynamically added variants
+    document
+        .querySelectorAll("#variants .variant-card")
+        .forEach(card => {
+            const subjectEl = card.querySelector(".variant-subject");
+            const bodyEl = card.querySelector(".variant-body");
+
+            if (!subjectEl || !bodyEl) return;
+
+            const subject = subjectEl.value.trim();
+            const body = bodyEl.value;
+
+            if (subject || body.trim()) {
+                variants.push({
+                    subject,
+                    body,
+                    buttons: getEmailButtons(bodyEl)
+                });
+            }
+        });
 
     return variants;
 }

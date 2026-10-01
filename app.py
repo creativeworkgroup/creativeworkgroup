@@ -4,6 +4,7 @@ from pathlib import Path
 import time
 import html
 import requests
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet
 from supabase import create_client
@@ -628,6 +629,108 @@ def test_proxy(proxy_id):
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
+
+def render_email_content(body, buttons):
+    """
+    Converts the plain-text composer body plus CTA markers into:
+      - safe HTML for HTML-capable email clients
+      - plain text with clickable URLs visible
+    """
+
+    buttons = buttons if isinstance(buttons, list) else []
+
+    button_map = {}
+
+    for button in buttons:
+        if not isinstance(button, dict):
+            continue
+
+        button_id = str(button.get("id", "")).strip()
+        button_text = str(button.get("text", "")).strip()
+        button_url = str(button.get("url", "")).strip()
+
+        if not button_id or not button_text or not button_url:
+            continue
+
+        parsed = urlparse(button_url)
+
+        if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+            continue
+
+        button_map[button_id] = {
+            "text": button_text,
+            "url": button_url,
+        }
+
+    token_pattern = re.compile(r"\[\[CTA:([A-Za-z0-9_-]+)\]\]")
+
+    html_parts = []
+    text_parts = []
+
+    cursor = 0
+
+    for match in token_pattern.finditer(body):
+        plain_before = body[cursor:match.start()]
+
+        if plain_before:
+            html_parts.append(
+                html.escape(plain_before).replace("\n", "<br>")
+            )
+            text_parts.append(plain_before)
+
+        button = button_map.get(match.group(1))
+
+        if button:
+            safe_text = html.escape(button["text"])
+            safe_url = html.escape(button["url"], quote=True)
+
+            html_parts.append(
+                '<div style="margin:24px 0;text-align:center;">'
+                '<a href="' + safe_url + '" '
+                'style="display:inline-block;'
+                'padding:12px 22px;'
+                'background:#111827;'
+                'color:#ffffff;'
+                'text-decoration:none;'
+                'border-radius:7px;'
+                'font-family:Arial,sans-serif;'
+                'font-size:14px;'
+                'font-weight:600;">'
+                + safe_text +
+                '</a>'
+                '</div>'
+            )
+
+            text_parts.append(
+                "\n" +
+                button["text"] +
+                ": " +
+                button["url"] +
+                "\n"
+            )
+        else:
+            # If a marker somehow has no matching button,
+            # preserve it as harmless text instead of losing content.
+            safe_marker = html.escape(match.group(0))
+            html_parts.append(safe_marker)
+            text_parts.append(match.group(0))
+
+        cursor = match.end()
+
+    remaining = body[cursor:]
+
+    if remaining:
+        html_parts.append(
+            html.escape(remaining).replace("\n", "<br>")
+        )
+        text_parts.append(remaining)
+
+    return (
+        "<p>" + "".join(html_parts) + "</p>",
+        "".join(text_parts)
+    )
+
+
 @app.post("/api/send")
 def send_email():
     denied = require_access()
@@ -663,9 +766,15 @@ def send_email():
             body = str(variant.get("body", "")).strip()
 
             if subject and body:
+                buttons = variant.get("buttons", [])
+
+                if not isinstance(buttons, list):
+                    buttons = []
+
                 cleaned_variants.append({
                     "subject": subject,
-                    "body": body
+                    "body": body,
+                    "buttons": buttons
                 })
 
         if not cleaned_variants:
@@ -801,6 +910,11 @@ def send_email():
             variant = cleaned_variants[variant_index]
 
             if provider == "cloudflare":
+                email_html, email_text = render_email_content(
+                    variant["body"],
+                    variant.get("buttons", [])
+                )
+
                 payload = {
                     "from": {
                         "address": sender_address,
@@ -808,17 +922,8 @@ def send_email():
                     },
                     "to": [recipient],
                     "subject": variant["subject"],
-                    "text": variant["body"],
-                    "html": (
-                        "<p>"
-                        + html.escape(
-                            variant["body"]
-                        ).replace(
-                            "\n",
-                            "<br>"
-                        )
-                        + "</p>"
-                    ),
+                    "text": email_text,
+                    "html": email_html,
                 }
 
             else:
@@ -829,21 +934,17 @@ def send_email():
                     else sender_address
                 )
 
+                email_html, email_text = render_email_content(
+                    variant["body"],
+                    variant.get("buttons", [])
+                )
+
                 payload = {
                     "from": from_value,
                     "to": [recipient],
                     "subject": variant["subject"],
-                    "text": variant["body"],
-                    "html": (
-                        "<p>"
-                        + html.escape(
-                            variant["body"]
-                        ).replace(
-                            "\n",
-                            "<br>"
-                        )
-                        + "</p>"
-                    ),
+                    "text": email_text,
+                    "html": email_html,
                 }
 
             try:
