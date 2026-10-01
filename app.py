@@ -1597,3 +1597,115 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=int(os.environ.get("PORT", 5000))
     )
+
+
+# ===== FINAL CTA EMAIL RENDERER =====
+def render_email_content(body, buttons=None):
+    import re
+    import html as _html
+    import urllib.parse
+
+    body = str(body or "")
+    buttons = buttons or []
+
+    by_id = {}
+    for b in buttons:
+        if isinstance(b, dict):
+            bid = str(b.get("id", "")).strip()
+            label = str(b.get("text", "")).strip()
+            url = str(b.get("url", "")).strip()
+            if bid and label and re.match(r"^https?://\S+$", url, re.I):
+                by_id[bid] = (label, url)
+
+    # Supports:
+    # [[CTA:id|label|url]]
+    # [[CTA:id]]
+    # [[CTA_BUTTON:label|url]]
+    pattern = re.compile(
+        r"\[\[CTA:([^|\]]+)\|([^|\]]*)\|([^\]]*)\]\]"
+        r"|\[\[CTA:([A-Za-z0-9_-]+)\]\]"
+        r"|\[\[CTA_BUTTON:([^|\]]+)\|([^\]]+)\]\]"
+    )
+
+    def decode(v):
+        try:
+            return urllib.parse.unquote(v or "")
+        except Exception:
+            return v or ""
+
+    def resolve(m):
+        # New self-contained format
+        if m.group(1):
+            label = decode(m.group(2)).strip()
+            url = decode(m.group(3)).strip()
+            return label, url
+
+        # Legacy metadata format
+        if m.group(4):
+            item = by_id.get(m.group(4))
+            if item:
+                return item
+            return None
+
+        # Older CTA_BUTTON format
+        label = decode(m.group(5)).strip()
+        url = decode(m.group(6)).strip()
+        return label, url
+
+    def html_button(m):
+        item = resolve(m)
+        if not item:
+            return ""
+
+        label, url = item
+
+        if not label or not re.match(r"^https?://\S+$", url, re.I):
+            return ""
+
+        return (
+            '<div style="text-align:center;margin:20px 0;">'
+            '<a href="' + _html.escape(url, quote=True) + '" '
+            'style="display:inline-block;'
+            'background:#3b82f6;'
+            'color:#ffffff;'
+            'text-decoration:none;'
+            'padding:13px 28px;'
+            'border-radius:10px;'
+            'font-family:Arial,sans-serif;'
+            'font-size:15px;'
+            'font-weight:700;'
+            'line-height:1.2;">'
+            + _html.escape(label) +
+            '</a>'
+            '</div>'
+        )
+
+    def text_button(m):
+        item = resolve(m)
+        if not item:
+            return ""
+
+        label, url = item
+        return "\n" + label + ": " + url + "\n"
+
+    # Protect CTA markers while escaping normal email text.
+    held = []
+
+    def hold(m):
+        held.append(m.group(0))
+        return f"__CTA_HOLDER_{len(held)-1}__"
+
+    safe_body = pattern.sub(hold, body)
+    html_body = _html.escape(safe_body).replace("\n", "<br>")
+
+    for i, marker in enumerate(held):
+        placeholder = _html.escape(f"__CTA_HOLDER_{i}__")
+        match = pattern.fullmatch(marker)
+        html_body = html_body.replace(
+            placeholder,
+            html_button(match) if match else ""
+        )
+
+    text_body = pattern.sub(text_button, body)
+
+    return "<p>" + html_body + "</p>", text_body
